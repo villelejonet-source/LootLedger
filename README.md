@@ -4,7 +4,8 @@ A gold ledger, pickpocket and gathering tracker, and auction house advisor for *
 
 - **Gold log:** every copper in and out, labelled (mob loot, pickpocket, vendor, quests, repairs, AH sales and fees, mail, flights…). View it by session, today, 7 days, 30 days or all time.
 - **Gathering:** pickpocket, skinning, mining, herbalism and fishing: how many, what dropped, what it's worth at AH prices, gold per hour.
-- **Inventory advice:** everything you own on all characters (bags, bank, mail), each marked **Sell now / List / Hold / Vendor**.
+- **Inventory advice:** everything you own on all characters (bags, bank, mail), each marked **Sell now / List / Hold / Vendor**. The advice line says what to post at and how likely it is to sell in a day (from what this auction house actually bought), and every hold comes with a target price and a deadline. It only advises: it never posts or cancels anything.
+- **Track record:** your active auctions with their chance to sell, what you actually got per item after the cut and lost deposits, and how often the advice was right compared with an ordinary day.
 - **Market view:** Alt+click any item for its price chart (30 days / 12 weeks / 12 months), trend, and weekly pattern, e.g. *cheapest Tuesday, most expensive Saturday: buy Tuesday, sell Saturday*. Built for a young economy: "normal" means the last few days, and patterns are measured against the trend and only shown when they're real. The advice uses them: hold a normal Tuesday price for Saturday, sell on the good day.
 - **Time of week:** the whole auction house's prices by hour of the week (*items list highest Friday 18:00-21:00*), so items without their own pattern still get a *list Fri 18:00* when it pays.
 - **Trending:** what's selling fast, getting pricier, drying up or cooling off on your auction house right now, measured from what was actually bought hour by hour. Guardrails keep out grey junk, one-buyer sweeps, sellers reposting and tiny markets.
