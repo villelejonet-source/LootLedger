@@ -14,7 +14,13 @@ A.SETTINGS = {
   ahCut = 0.05,          -- AH keeps 5% of the sale price
   highVsNormal = 0.10,   -- 10% above the recent normal = sell now
   spike = 0.25,          -- 25% above = call it a spike
-  lowVsNormal = -0.10,   -- 10% below normal = hold (only if not falling)
+  lowVsNormal = -0.10,   -- 10% below normal = below normal (sold now if demand dropped)
+  holdVsNormal = -0.20,  -- hold only a dip 20%+ below normal, with demand steady and not falling:
+                         -- smaller dips rarely come back (a day 10-25% below: median -0.6% the next)
+  holdHours = 48,        -- a hold lasts up to 48h from when it was first advised, then sell
+  holdBack = 0.5,        -- a dip is held for a price halfway back to normal
+  freshHours = 2,        -- "high, sell now" only on prices under 2h old: highs fade within hours
+  driftShare = 0.5,      -- the whole AH falling at half the item's rate or more = "whole market falling"
   fallingTrend = -0.01,  -- losing 1%+ a day = sell now, don't hold
   risingTrend = 0.015,   -- gaining 1.5%+ a day = wait a little (unless it's a spike)
   minListed = 10,        -- fewer units listed than this: one odd listing sets "the price", don't act on it
@@ -205,8 +211,48 @@ local function Worth(plan, vendor)
   return math.max(vendor, math.floor(Value(plan.price, plan)))
 end
 
+-- "5h", "1 day", "2 days"
+local function Span(s)
+  local h = math.ceil(s / 3600)
+  if h < 24 then return h .. "h" end
+  local days = math.floor(h / 24 + 0.5)
+  return days == 1 and "1 day" or (days .. " days")
+end
+
+-- Holds end. Each lasts up to holdHours from when it was first advised for an item
+-- you own (remembered on the account, ns.acc.holds[id] = start), then the advice
+-- is to sell. A day after it ended the item is forgotten: a later dip gets its own.
+local function HoldKept(start) return time() - start <= (A.SETTINGS.holdHours + 24) * 3600 end
+
+ns.OnInit(function()
+  for id, start in pairs(ns.acc.holds or {}) do
+    if not HoldKept(start) then ns.acc.holds[id] = nil end
+  end
+end)
+
+-- HOLD for `target` or more until the hold ends, then SELL.
+local function Hold(d, id, why, target)
+  local holds = ns.acc and ns.acc.holds
+  local start = holds and holds[id]
+  if not (start and HoldKept(start)) then
+    start = time()
+    if ns.acc and ns.Inventory.Total(id) > 0 then
+      ns.acc.holds = holds or {}
+      ns.acc.holds[id] = start
+    end
+  end
+  local ends = start + A.SETTINGS.holdHours * 3600
+  if time() >= ends then
+    d.action, d.reason = "SELL", "hold ended: sell now (" .. why .. ")"
+  else
+    d.action, d.target, d.holdUntil = "HOLD", math.ceil(target), ends
+    d.reason = why .. ": hold up to " .. Span(ends - time()) .. " for " .. ns.Money(d.target) .. "+, then sell"
+  end
+end
+
 -- Returns { action, reason, unit (copper you'd get per item), ah, normal, vs, plan,
---   and for LIST/SELL: post (suggested price), pSell (chance in 24h, or nil) }
+--   and for LIST/SELL: post (suggested price), pSell (chance in 24h, or nil),
+--   and for a HOLD: target (price to hold for), holdUntil (when to sell anyway) }
 -- qty: how many you'd post (default: what your characters on this AH own).
 function A.Decide(id, qty)
   local S = A.SETTINGS
@@ -226,7 +272,9 @@ function A.Decide(id, qty)
     return { action = "CHECK", reason = "Don't vendor: check the AH first", unit = 0 }
   end
 
-  local ah = ns.Prices.AHPrice(p)
+  -- Decide on the median of the feed's last 3 hours when it has one: one hour's
+  -- price is often noise (a fifth of hourly moves are 5%+).
+  local ah = p.steady or ns.Prices.AHPrice(p)
   local normal = ns.Prices.NormalPrice(p, id)
   local plan = A.PostPlan(id, p, math.max(1, qty or ns.Inventory.Total(id)))
   local d = { ah = ah, normal = normal, plan = plan, unit = Worth(plan, vendor) }
@@ -267,11 +315,12 @@ function A.Decide(id, qty)
   local drop = RecentDrop(h, ah)
   local crash = vs <= S.crashVsNormal and drop ~= nil and drop <= S.crashVsRecent
   d.demand, d.crash = demand, crash or nil
+  local high  -- "it's high, sell now": only on fresh prices (below)
   if thin and (vs >= S.highVsNormal or vs <= S.lowVsNormal) then
     d.action = "LIST"
     d.reason = "only " .. listed .. " listed, price uncertain: check the AH"
   elseif vs >= S.spike and gain >= S.minSpikeGain then
-    d.action, d.reason = "SELL", VsText(vs) .. ", spike"
+    d.action, d.reason, high = "SELL", VsText(vs) .. ", spike", true
   elseif below and demand == "down" then
     -- Cheaper AND fewer buyers: the price is unlikely to come back. Don't hold.
     d.action = "SELL"
@@ -279,39 +328,48 @@ function A.Decide(id, qty)
       .. ((sales and sales.normal) and (" (" .. sales.sold24 .. " sold in 24h, normally " .. math.floor(sales.normal + 0.5) .. ")") or "")
       .. ", unlikely to come back"
   elseif falling then
-    d.action, d.reason = "SELL", "falling " .. Pct(-trend):gsub("^%+", "") .. "/day, sell before it drops"
+    -- Mostly the whole AH falling (it drifts down 1-3% a day at times): say so.
+    local drift = ns.Prices.Drift()
+    d.action, d.reason = "SELL", "falling " .. Pct(-trend):gsub("^%+", "") .. "/day"
+      .. ((drift and drift <= trend * S.driftShare) and ", whole market falling" or "") .. ", sell before it drops"
   elseif rising then
-    d.action, d.reason = "HOLD", "rising " .. Pct(trend) .. "/day, wait a little"
+    Hold(d, id, "rising " .. Pct(trend) .. "/day", ah * (1 + trend) ^ (S.holdHours / 24))
   elseif vs >= S.highVsNormal then
-    d.action, d.reason = "SELL", VsText(vs)
+    d.action, d.reason, high = "SELL", VsText(vs), true
     if gain < S.minSpikeGain then d.reason = d.reason .. ", only " .. ns.Money(gain) .. " more each" end
-  elseif below and demand == "steady" then
-    d.action, d.reason = "HOLD", Pct(vs) .. " vs normal, demand steady: a dip, wait"
+  elseif vs <= S.holdVsNormal and demand == "steady" then
+    -- A real dip with buyers still there: worth a bounded wait for part of the way back.
+    Hold(d, id, Pct(vs) .. " vs normal, demand steady", ah + (expected - ah) * S.holdBack)
   elseif below and crash then
     -- Dropped hard just now and no sales data says why: a dip or a collapse?
     d.action = "CRASH"
     d.reason = "dropped " .. (Pct(-drop):gsub("^%+", "")) .. " since yesterday, can't tell a dip from demand gone: check the AH before holding"
   elseif below then
-    d.action, d.reason = "HOLD", Pct(vs) .. " vs normal, wait"
+    d.action, d.reason = "LIST", Pct(vs) .. " vs normal, dips rarely come back"
   else
     d.action, d.reason = "LIST", timing and "Normal price for now" or "Normal price"
   end
 
   -- A reliable weekly pattern: list at the good time of the week. Only for items
-  -- that would be listed or held anyway: spikes, falling items and crashes keep
-  -- their advice.
-  if timing and (d.action == "LIST" or d.action == "HOLD") then
+  -- that would be listed anyway: spikes, falling items, crashes and holds (which
+  -- have their own deadline) keep their advice.
+  if timing and d.action == "LIST" then
     local whose = timing.source == "house" and " (whole AH)" or ""
     if not timing.goodNow and timing.upside >= S.waitGain and ah * timing.upside >= S.minWaitGain then
       d.action = "HOLD"
       d.reason = d.reason .. "; list " .. timing.when .. ", usually " .. Pct(timing.upside) .. " then" .. whose
       d.waitUntil = timing.at
-    elseif timing.goodNow and d.action == "LIST" and timing.best > 1 then
+    elseif timing.goodNow and timing.best > 1 then
       d.action = "SELL"
       d.reason = "Best time of the week, usually " .. Pct(timing.best - 1) .. " vs the week" .. whose
-    elseif timing.goodNow then
-      d.reason = d.reason .. ", though now is usually the best time of the week" .. whose
     end
+  end
+  -- "High, sell now" goes stale fast (an hour 10%+ above normal is typically 14%
+  -- lower 6 hours later): only on prices under freshHours old, from the feed or
+  -- your newer scan. Older: look at the AH first.
+  local asOf = p.scanned or p.updated
+  if high and asOf and time() - asOf >= S.freshHours * 3600 then
+    d.action, d.reason = "LIST", VsText(vs) .. " " .. ns.Ago(time() - asOf) .. ": check the AH first"
   end
   local wk = ns.Prices.WeekdayAdvice(h)
   if wk then d.bestDays = wk.best end

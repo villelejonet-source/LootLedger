@@ -223,3 +223,26 @@ test("A13: queue depth ships as a new table for items with history; existing lin
   assert.ok(salesLines.length > 0);
   for (const l of salesLines) assert.match(l, /^\[\d+\]="\d+,-?\d+,\d+",$/);
 });
+
+test("A14: the median of the last 3 hours ships as `steady`, the house's median trend as `drift`", async () => {
+  const now = Date.now(), H = 3600e3, DAY = 86400e3;
+  const dk = (t) => new Date(t).toISOString().slice(0, 10);
+  // Ten items with 20 listed at 100 now, after 12 days falling 2% a day; Linen at 50 now, 70 and 60 the hours before.
+  const ids = Array.from({ length: 10 }, (_, i) => 1001 + i);
+  const auctions = [listing(1, 2589, 20, 50), ...ids.map((id, i) => listing(10 + i, id, 20, 100))];
+  const days = {};
+  for (let k = 1; k <= 12; k++) {
+    const m = 100 / Math.pow(0.98, k);
+    days[dk(now - k * DAY)] = Object.fromEntries(ids.map((id) => [id, [m, 1, m, 20, Math.log(m)]]));
+  }
+  const hours = [{ t: now - 2 * H, s: {}, q: { 2589: [20, 70] }, diff: false }, { t: now - H, s: {}, q: { 2589: [20, 60] }, diff: false }];
+  const lm = new Date(now).toUTCString();
+  const r = await runFeed({ houses: HOUSES.slice(0, 1), data: { 113: { auctions, lm, clm: lm } } },
+    { "113.json.gz": { days, months: {}, hours, sales: {}, salesHours: {}, salesRules: 2 } });
+  assert.equal(r.code, 0, r.out);
+  const lua = await r.lua();
+  assert.match(lua, /\n    steady = \{\n\[2589\]=60,\n    \},\n/, "only where it differs from this hour's market");
+  const drift = Number(lua.match(/, days = \d+, drift = (-?\d+),\n/)?.[1]);
+  assert.ok(drift <= -18 && drift >= -22, `drift ${drift}`);
+  assert.match(lua, / updated = \d+, listings = /, "keepLastGood still finds the time");
+});

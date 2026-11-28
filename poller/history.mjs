@@ -1,14 +1,14 @@
 // History storage and what the game reads from it.
 //
 // Stored per auction house (history/<house>.json.gz):
-//   days:   { "YYYY-MM-DD": { [itemId]: [sum of hourly market, hours, lowest min, sum of hourly qty] } }
+//   days:   { "YYYY-MM-DD": { [itemId]: [sum of hourly market, hours, lowest min, sum of hourly qty, sum of log(hourly market)] } }
 //           kept for KEEP_DAYS; older days are folded into...
 //   months: { "YYYY-MM": { [itemId]: [sum of daily market, days] } }
 //           kept forever (small: one entry per item per month)
 //
 // For the game: per-item series, a compact per-item history string (hist) and
 // the labels for its series.
-import { analyze, baseline, weekKey, monthKey, dayKey } from "./analysis.mjs";
+import { analyze, baseline, median, weekKey, monthKey, dayKey } from "./analysis.mjs";
 
 export const HIST_OUT_DAYS = 30; // daily points sent to the game per item
 export const KEEP_DAYS = 120;    // daily detail kept; older days live on as monthly averages
@@ -18,12 +18,39 @@ export function addSnapshot(history, items, now) {
   const today = dayKey(now);
   const day = (history.days[today] ??= {});
   for (const [id, s] of Object.entries(items)) {
-    const e = (day[id] ??= [0, 0, s.min, 0]);
+    const e = (day[id] ??= [0, 0, s.min, 0, 0]);
     e[0] += s.market;
     e[1] += 1;
     e[2] = Math.min(e[2], s.min);
     e[3] = (e[3] ?? 0) + s.qty;
+    // A day begun before log sums were kept has none: it stays arithmetic (dayMarket).
+    // 4 decimals are plenty (0.01% of a price) and keep the file small.
+    if (e[4] != null) e[4] = Math.round((e[4] + Math.log(Math.max(1, s.market))) * 1e4) / 1e4;
   }
+}
+
+// A day's market: the geometric mean of its hourly markets, so a brief spike
+// can't inflate it ("normal" would then make ordinary prices look like dips).
+// Days stored without log sums: the arithmetic mean.
+export function dayMarket(e) {
+  return e[4] != null ? Math.exp(e[4] / e[1]) : e[0] / e[1];
+}
+
+// Each item's median market over the last 3 hourly snapshots (history.hours, no
+// more than 4 hours apart): a steadier "price now" than one snapshot, as a fifth
+// of hourly moves are 5%+ and highs fade within hours. { [itemId]: copper }
+export function recentMedians(hours) {
+  const last = [];
+  for (let i = hours.length - 1; i >= 0 && last.length < 3; i--) {
+    if (!last.some((h) => h.t === hours[i].t)) last.push(hours[i]);  // the same snapshot twice: once
+  }
+  const out = {};
+  if (last.length < 3 || last[0].t - last[2].t > 4 * 3600e3) return out;
+  for (const id of Object.keys(last[0].q)) {
+    const v = last.map((h) => h.q[id]?.[1]);
+    if (v.every((x) => x > 0)) out[id] = median(v);
+  }
+  return out;
 }
 
 // Fold days older than KEEP_DAYS into monthly averages, then drop them.
@@ -36,7 +63,7 @@ export function archiveOldDays(history, now, keepDays = KEEP_DAYS) {
     for (const [id, e] of Object.entries(history.days[key])) {
       if (!(e[1] > 0)) continue;
       const m = (month[id] ??= [0, 0]);
-      m[0] += e[0] / e[1];
+      m[0] += dayMarket(e);
       m[1] += 1;
     }
     delete history.days[key];
@@ -59,7 +86,7 @@ export function monthlyFor(history, days, id, keys) {
     const e = history.days[key]?.[id];
     if (e && e[1] > 0) {
       const a = (acc[monthKey(key)] ??= [0, 0]);
-      a[0] += e[0] / e[1];
+      a[0] += dayMarket(e);
       a[1] += 1;
     }
   }
@@ -80,7 +107,7 @@ export function seriesFor(history, days, id) {
   return days.map((key) => {
     const e = history.days[key]?.[id];
     const ok = e && e[1] > 0;
-    return { key, market: ok ? e[0] / e[1] : null, qty: ok && e[3] != null ? e[3] / e[1] : null };
+    return { key, market: ok ? dayMarket(e) : null, qty: ok && e[3] != null ? e[3] / e[1] : null };
   });
 }
 

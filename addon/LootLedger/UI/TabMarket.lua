@@ -129,6 +129,10 @@ local function Render(view)
     rows[#rows + 1] = { kind = "note", text = "AH price from your scan " .. ns.Ago(time() - p.scanned)
       .. " (" .. (p.auctions or 0) .. " listed). The chart and averages come from the hourly feed." }
   end
+  if ah and d.ah and d.ah ~= ah then
+    rows[#rows + 1] = { kind = "note", text = "The advice goes by " .. ns.Money(d.ah)
+      .. ", the middle of the last 3 hourly prices: one hour's price is often noise." }
+  end
   ScanRows(rows, id)
 
   local badgeColors = { SELL = C.green, LIST = C.gold, HOLD = C.blue, CRASH = C.red, CHECK = { 1, 0.6, 0.2, 1 },

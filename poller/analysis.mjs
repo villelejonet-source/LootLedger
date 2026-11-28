@@ -82,6 +82,13 @@ export function fitTrend(values, days = SETTINGS.trendDays, halfLife = SETTINGS.
   return den ? Math.exp(num / den) - 1 : null;
 }
 
+// The whole house's drift: the median of its items' trends (fraction per day), or
+// null with under 10 trends. An item falling with everything else isn't news about it.
+export function houseTrend(trends) {
+  const v = trends.filter((x) => x != null);
+  return v.length >= 10 ? median(v) : null;
+}
+
 // Typical day-to-day movement (std dev of daily log changes), as a fraction.
 export function volatility(values) {
   const r = [];
