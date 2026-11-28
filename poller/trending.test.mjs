@@ -146,7 +146,7 @@ test("commodities: a pricier stack that vanished while a cheaper one stayed was 
   const prev = { t: 0, l: [[1, 100, 50, 10, LONG, 1], [2, 100, 50, 12, LONG, 1], [3, 100, 5000, 20, LONG, 1]] };
   const cur = { t: HOUR, l: [[2, 100, 50, 12, LONG, 1]] };
   const d = diffSnapshots(prev, cur).get(100);
-  assert.equal(d.units, 50, "only the cheapest stack (below the untouched one) counts as bought");
+  assert.equal(d.units, 50, "only the cheapest stack (below the one still there) counts as bought");
   assert.equal(d.cancelled, 5000, "the big pricier stack was pulled by its seller");
 });
 
@@ -156,6 +156,40 @@ test("commodities: buying from the bottom up counts in full", () => {
   const d = diffSnapshots(prev, cur).get(100);
   assert.equal(d.units, 130);
   assert.equal(d.cancelled, 0);
+});
+
+test("commodities: a partly bought cheap stack also caps the price: pricier stacks that vanished were cancelled", () => {
+  // Busy house: the cheapest stack was partly bought (so nothing is untouched), the pricey one was pulled.
+  const prev = { t: 0, l: [[1, 100, 50, 10, LONG, 1], [2, 100, 5000, 30, LONG, 1]] };
+  const cur = { t: HOUR, l: [[1, 100, 20, 10, LONG, 1]] };
+  const d = diffSnapshots(prev, cur).get(100);
+  assert.equal(d.units, 30);
+  assert.equal(d.cancelled, 5000);
+});
+
+test("commodities: at one price the oldest go first, so a newer stack gone while an older one stayed was cancelled", () => {
+  // Everything at 1c (ammo): stack 5 (newer) vanished, stack 3 (older) is still there.
+  const prev = { t: 0, l: [[3, 100, 200, 1, LONG, 1], [5, 100, 4000, 1, LONG, 1], [1, 100, 300, 1, LONG, 1]] };
+  const cur = { t: HOUR, l: [[3, 100, 200, 1, LONG, 1], [9, 100, 3800, 1, LONG, 1]] };
+  const d = diffSnapshots(prev, cur).get(100);
+  assert.equal(d.units, 300, "stack 1 is older than stack 3: bought");
+  assert.equal(d.cancelled, 4000, "stack 5 is newer than stack 3: cancelled (and reposted as 3800)");
+});
+
+test("commodities: a whole book gone in one hour is capped by the cheapest new listing", () => {
+  const prev = { t: 0, l: [[1, 100, 200, 39, LONG, 1], [2, 100, 300, 40, LONG, 1], [3, 100, 100, 4800, LONG, 1]] };
+  const cur = { t: HOUR, l: [[9, 100, 450, 45, LONG, 1]] };
+  const d = diffSnapshots(prev, cur).get(100);
+  assert.equal(d.units, 500, "39c and 40c are under the new 45c: bought (a buyout and relist)");
+  assert.equal(d.cancelled, 100, "48s each, over the new listing: pulled");
+});
+
+test("single listings: one priced over 10% above a copy that's still there was cancelled", () => {
+  const prev = { t: 0, l: [[1, 200, 1, 1000, LONG], [2, 200, 1, 1050, LONG], [3, 200, 1, 1300, LONG]] };
+  const cur = { t: HOUR, l: [[1, 200, 1, 1000, LONG]] };
+  const d = diffSnapshots(prev, cur).get(200);
+  assert.equal(d.units, 1, "5% above the cheapest copy: may differ in stats, counted as bought");
+  assert.equal(d.cancelled, 1, "30% above: cancelled");
 });
 
 test("MEDIUM listings that vanish within the hour count as expired", () => {
@@ -240,4 +274,17 @@ test("trendingLists says when it will be ready, and only while it isn't", () => 
   assert.equal(trendingLists(h, itemsOf(SPEC), NOW).readyAt, undefined);
   h.sales = {}; h.salesHours = {};
   assert.ok(trendingLists(h, itemsOf(SPEC), NOW).readyAt > NOW);
+});
+
+test("sales counted under older rules are dropped once, then kept", async () => {
+  const { resetSales, SALES_RULES } = await import("./sales.mjs");
+  const h = { sales: { "2026-11-27": { 100: [500, 5, 1000] } }, salesHours: { "2026-11-27": 24 }, hours: [{ t: 1, s: { 100: [5, 1, 10] }, q: {}, diff: true, h: 1 }] };
+  assert.equal(resetSales(h), true);
+  assert.deepEqual(h.sales, {});
+  assert.deepEqual(h.hours[0].s, {});
+  assert.equal(h.hours[0].diff, false);
+  assert.equal(h.salesRules, SALES_RULES);
+  h.sales["2026-11-28"] = { 100: [5, 1, 10] };
+  assert.equal(resetSales(h), false);
+  assert.ok(h.sales["2026-11-28"]);
 });

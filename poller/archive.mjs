@@ -4,7 +4,8 @@
 // daily averages and the last 30 hours.
 //
 // One file per house per UTC day, in the history folder:
-//   <house>.hours.<YYYY-MM-DD>.json.gz = { v: 1, fields: [...], hours: [{ t, d: { [itemId]: [...] } }] }
+//   <house>.hours.<YYYY-MM-DD>.json.gz = { v: 1, fields: [...], hours: [{ t, r, d: { [itemId]: [...] } }] }
+// (r = poller/sales.mjs SALES_RULES that counted "sold" that hour; hours without r used rules 1)
 // with, per item and hour (copper per unit, units):
 //   min, market, qty (units listed), n (listings), q5, q10, q25 (units listed at
 //   most 5% / 10% / 25% above min: the queue a new listing joins), sold (units
@@ -16,6 +17,7 @@ import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { dayKey } from "./analysis.mjs";
 import { readGzJson } from "./feed.mjs";
+import { SALES_RULES } from "./sales.mjs";
 
 export const ARCHIVE_DAYS = 35;
 export const FIELDS = ["min", "market", "qty", "n", "q5", "q10", "q25", "sold", "gold", "span"];
@@ -73,7 +75,7 @@ export async function archiveHour(dir, house, t, items, sold, span, history) {
     const [q5, q10, q25] = s.depth ?? [null, null, null];
     d[id] = [s.min, s.market, s.qty, s.n ?? null, q5, q10, q25, b ? b.units : 0, b ? Math.round(b.gold) : 0, sold ? Math.round(span * 100) / 100 : 0];
   }
-  day.hours.push({ t, d });
+  day.hours.push({ t, d, r: SALES_RULES }); // r: the sales rules (poller/sales.mjs) that counted "sold"
   day.hours.sort((a, b) => a.t - b.t);
   await writeFile(file, gzipSync(JSON.stringify(day)));
   return { added: Object.keys(d).length, file };
@@ -101,7 +103,7 @@ export async function readArchive(dir, house) {
     for (const h of day.hours) {
       const d = {};
       for (const [id, row] of Object.entries(h.d)) d[id] = Object.fromEntries(day.fields.map((k, i) => [k, row[i]]));
-      out.push({ t: h.t, d });
+      out.push({ t: h.t, rules: h.r ?? 1, d });
     }
   }
   return out;

@@ -20,7 +20,7 @@ import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { dayKey } from "./analysis.mjs";
 import { carryOverHistory, readGzJson, fetchRetry, diffPlausible, snapshotTime, luaEscape, toId, toPositive } from "./feed.mjs";
-import { TIME_LEFT, toSnapshot, diffSnapshots, recordHour } from "./sales.mjs";
+import { TIME_LEFT, toSnapshot, diffSnapshots, recordHour, resetSales } from "./sales.mjs";
 import { trendingLists, encodeEntry } from "./trending.mjs";
 import { recordIndex, marketIndex, backfillIndex, hourProfile, encodeWeekHours } from "./weekhours.mjs";
 import { archiveHour, pruneArchive, depth } from "./archive.mjs";
@@ -228,6 +228,7 @@ for (const house of houses) {
   }
   housesRead++;
   const history = await loadHistory(house.id);
+  if (resetSales(history)) console.log(`house ${house.id}: sales counted under older rules dropped; they rebuild from now`);
   // What was bought since the previous snapshot (only if Blizzard has new data).
   const prevSnap = await loadSnapshot(house.id);
   const fresh = !prevSnap || data.snapshot.t > prevSnap.t;

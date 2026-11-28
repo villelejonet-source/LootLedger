@@ -10,12 +10,28 @@
 //       ...it had under 2 hours left (SHORT or MEDIUM)                         -> expired
 //       ...it had 2-12 hours left (LONG) and the snapshots are over 2 hours apart -> expired
 //       ...a stack of the same size was newly listed for the same item          -> cancelled and relisted
-//       ...it's a commodity and a cheaper listing of it is still there, untouched -> cancelled
-//          (commodity buyers always get the cheapest units first, so nobody
-//           skipped a cheaper stack to buy a pricier one)
+//       ...it's a commodity and a cheaper listing of it is still there (even partly bought),
+//          or an older one at the same price, or (all old ones gone) a cheaper new one -> cancelled
+//          (commodity buyers always get the cheapest units first, oldest first at one
+//           price, so nobody skipped a cheaper or older stack to buy this one)
 //   - more than 12 hours between snapshots -> too much changed to tell; nothing is counted
 
 export const TIME_LEFT = { SHORT: 0, MEDIUM: 1, LONG: 2, VERY_LONG: 3 };
+
+// Bumped when the rules above change how much counts as bought. Sales counted
+// under older rules are dropped (resetSales), so the trending baselines and
+// "normal per day" are never a mix of old and new counts.
+export const SALES_RULES = 2;
+
+// Drop sales counted under older rules; they rebuild from the next hours.
+export function resetSales(history) {
+  if ((history.salesRules ?? 1) >= SALES_RULES) return false;
+  history.sales = {};
+  history.salesHours = {};
+  for (const h of history.hours ?? []) { h.s = {}; h.diff = false; delete h.h; }
+  history.salesRules = SALES_RULES;
+  return true;
+}
 const HOUR = 3600e3;
 
 export function toSnapshot(t, listings) {
@@ -40,12 +56,37 @@ export function diffSnapshots(prev, cur) {
   for (const a of prev.l) if (a[5]) commodities.add(a[1]);
   const prevIds = new Set();
 
-  // Cheapest listing per item that's still there, untouched.
-  const cheapestUntouched = new Map();
-  for (const [id, item, qty, price] of prev.l) {
+  // Cheapest listing per item that's still there, whole or partly bought. Commodity
+  // buyers always get the cheapest units first, so while units at this price were
+  // left, nobody bought anything pricier: a pricier listing that's gone was cancelled.
+  // (Using only untouched listings put the line far too high on busy houses, where
+  // nearly every cheap listing gets partly bought within the hour.)
+  // Also the oldest listing (lowest auction ID) still there at that cheapest price:
+  // at one price, the oldest units go first, so a gone listing newer than one that's
+  // still there at the same price was cancelled, not bought.
+  const cheapestLeft = new Map(), oldestLeftAtCheapest = new Map();
+  for (const [id, item, , price] of prev.l) {
     const now = curById.get(id);
-    if (now && now[2] === qty && price < (cheapestUntouched.get(item) ?? Infinity)) cheapestUntouched.set(item, price);
+    if (!(now && now[2] > 0)) continue;
+    const c = cheapestLeft.get(item) ?? Infinity;
+    if (price < c) { cheapestLeft.set(item, price); oldestLeftAtCheapest.set(item, id); }
+    else if (price === c && id < oldestLeftAtCheapest.get(item)) oldestLeftAtCheapest.set(item, id);
   }
+  // Nothing old left at all (a whole item cleared in one hour): the cheapest new
+  // listing caps it instead. Buyers would have taken those units before pricier ones.
+  const allPrevIds = new Set(prev.l.map((a) => a[0]));
+  const cheapestNew = new Map();
+  for (const [id, item, , price] of cur.l) {
+    if (allPrevIds.has(id) || !commodities.has(item) || cheapestLeft.has(item)) continue;
+    if (price < (cheapestNew.get(item) ?? Infinity)) cheapestNew.set(item, price);
+  }
+  // Was this gone commodity listing cancelled rather than bought?
+  const cancelledCommodity = (id, item, price) => {
+    const left = cheapestLeft.get(item);
+    if (left == null) return price > (cheapestNew.get(item) ?? Infinity) * 1.005;
+    if (price > left * 1.005) return true;
+    return price >= left && id > oldestLeftAtCheapest.get(item);
+  };
 
   const gone = new Map(); // item -> [{ qty, price }]
   for (const [id, item, qty, price, tl] of prev.l) {
@@ -62,7 +103,10 @@ export function diffSnapshots(prev, cur) {
     }
     const mayHaveExpired = tl === TIME_LEFT.SHORT || tl === TIME_LEFT.MEDIUM || (tl === TIME_LEFT.LONG && gap > 2 * HOUR);
     if (mayHaveExpired) { entry(item).expired += qty; continue; }
-    if (commodities.has(item) && price > (cheapestUntouched.get(item) ?? Infinity) * 1.005) {
+    // Single listings: buyers pick from the list too, cheapest first, but copies of an
+    // item ID can differ (random stats), so allow 10% before calling it a cancel.
+    const pricier = !commodities.has(item) && price > (cheapestLeft.get(item) ?? Infinity) * 1.10;
+    if (pricier || (commodities.has(item) && cancelledCommodity(id, item, price))) {
       entry(item).cancelled += qty;
       continue;
     }
