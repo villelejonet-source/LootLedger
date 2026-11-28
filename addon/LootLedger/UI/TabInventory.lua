@@ -111,7 +111,7 @@ local function Render(filter)
 
   local scanned = ns.db.inv and ns.db.inv.scanned or {}
   rows[#rows + 1] = { kind = "space", h = 6 }
-  local score = A.ScoreText()  -- how the advice did (Advisor.lua, track record)
+  local score = filter == "ALL" and A.ScoreText()  -- how the advice did (Advisor.lua, track record)
   if score then rows[#rows + 1] = { kind = "note", text = score } end
   rows[#rows + 1] = { kind = "note", text = "Bank last seen " ..
     (scanned.bank and date("%d %b %H:%M", scanned.bank) or "never") ..

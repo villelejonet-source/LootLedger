@@ -236,34 +236,17 @@ function PostRows(rows, d)
     value = (pl.chance and (math.floor(pl.chance * 100 + 0.5) .. "% sells, ") or "") .. "worth ~" .. ns.Money(d.unit or 0) .. T.Color(" each", C.muted) }
 end
 
--- Your results with it (Trade.Results) and how the advice for it did (Advisor.Score):
--- only what has data.
+-- Your AH results with it (Trade.Results): only what has data.
 function ResultRows(rows, id)
-  local r, s = ns.Trade.Results(id), ns.Advisor.Score(id)
-  if not r and s.days == 0 then return end
+  local r = ns.Trade.Results(id)
+  if not r then return end
   rows[#rows + 1] = { kind = "section", text = "Your results", right = T.Color("last 30 days, this AH", C.muted) }
-  if r and r.unit then
+  if r.unit then
     rows[#rows + 1] = { kind = "row", label = "You got", value = ns.Money(r.unit) .. T.Color(" each", C.muted),
       note = "after the AH cut and lost deposits, " .. r.sales .. (r.sales == 1 and " sale" or " sales") }
   end
-  if r and r.sold + r.back > 0 then
-    rows[#rows + 1] = { kind = "row", label = "Sold before it expired", value = math.floor(r.sold / (r.sold + r.back) * 100 + 0.5) .. "%",
-      note = r.sold .. " sold, " .. r.back .. " came back unsold" }
-  end
-  if r and r.wait then
-    rows[#rows + 1] = { kind = "row", label = "Typical time to sell", value = ns.Advisor.Span(r.wait),
-      note = "from posting to taking the gold" }
-  end
-  if s.days > 0 then
-    local parts = {}
-    for _, k in ipairs({ "SELL", "LIST", "HOLD" }) do
-      local c = s[k]
-      if c.n > 0 then parts[#parts + 1] = ns.Advisor.ACTIONS[k].label:lower() .. " " .. c.right .. " of " .. c.n end
-    end
-    rows[#rows + 1] = { kind = "row", label = "Advice for it",
-      note = #parts > 0 and ("right: " .. table.concat(parts, ", ")) or "not judged yet: needs the next 2 days' prices",
-      value = s.days .. (s.days == 1 and " day" or " days") }
-  end
+  rows[#rows + 1] = { kind = "row", label = "Sold before it expired", value = math.floor(r.sold / (r.sold + r.back) * 100 + 0.5) .. "%",
+    note = r.sold .. " sold, " .. r.back .. " came back unsold" }
 end
 
 -- The whole auction house by hour of the week: when do items list highest and lowest?
