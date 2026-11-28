@@ -332,6 +332,7 @@ function A.Decide(id, qty)
   -- newer scan), a spike says how old it is, a smaller high says look first. Such
   -- lines (d.stale) suggest no post price.
   local asOf = p.scanned or p.updated
+  d.asOf = asOf  -- when the price is from (the track record files the advice under its day)
   local age = asOf and time() - asOf or 0
   local stale = age >= S.freshHours * 3600
   if thin and (vs >= S.highVsNormal or vs <= S.lowVsNormal) then
@@ -412,12 +413,154 @@ function A.Decide(id, qty)
   return d
 end
 
+---------------------------------------------------------------------------
+-- Track record: how well did the advice do?
+-- InventoryPlan remembers the advice for each item you own on this AH, once a day,
+-- for 30 days, if the item has a price history to judge it by and the advice isn't
+-- "look first" (stale or thin prices):
+--   ns.acc.advice[house][id][day] = "S" (SELL) | "L" (LIST) | "H,<target>,<ends>" (HOLD)
+-- day is the UTC date of the price (as the feed labels its daily prices); prices
+-- over 6 hours old aren't remembered. Holds without a target (a better time of the
+-- week, "not worth posting now") aren't either.
+-- Judged on the feed's daily prices, against the advice day's own price (v), once
+-- the days needed are over:
+--   * SELL was right if the price 2 days later was no higher than v.
+--   * LIST was right if v was at least the average of the next 2 days.
+--   * HOLD was right if a day after it, up to its deadline, reached the target (or v).
+-- A run of the same advice on an item counts once, from its first day. Each figure
+-- comes with the same rule's rate on any day of those items ("any day"): the advice
+-- is only worth something if it beats that.
+---------------------------------------------------------------------------
+local TRACK_DAYS, SCORE_MIN, MAX_AGE = 30, 5, 6 * 3600
+
+local function UTCDay(t)
+  local u = date("!*t", t)
+  return string.format("%04d-%02d-%02d", u.year, u.month, u.day)
+end
+
+local function NextDay(day)
+  local y, m, d = day:match("^(%d+)-(%d+)-(%d+)$")
+  return UTCDay(time({ year = tonumber(y), month = tonumber(m), day = tonumber(d) + 1, hour = 12 }))
+end
+
+ns.OnInit(function()
+  local oldest = UTCDay(time() - TRACK_DAYS * 86400)
+  for house, items in pairs(ns.acc.advice or {}) do
+    for id, days in pairs(items) do
+      for day, r in pairs(days) do if day < oldest or type(r) ~= "string" then days[day] = nil end end
+      if not next(days) then items[id] = nil end
+    end
+    if not next(items) then ns.acc.advice[house] = nil end
+  end
+end)
+
+local CODE = { SELL = "S", LIST = "L", HOLD = "H" }
+
+-- Remember one decision (InventoryPlan). day: UTCDay(d.asOf), worked out by the caller.
+local function Remember(house, id, d, day)
+  local code = CODE[d.action]
+  if not code or d.stale or d.thin or not d.asOf or time() - d.asOf > MAX_AGE then return end
+  if code == "H" then
+    if not d.target then return end
+    code = "H," .. d.target .. "," .. d.holdUntil
+  end
+  local all = ns.acc.advice or {}
+  local items = all[house] or {}
+  local days = items[id] or {}
+  if days[day] or not ns.Prices.History(id) then return end
+  ns.acc.advice, all[house], items[id], days[day] = all, items, days, code
+end
+
+-- Would advice `kind` ("S", "L", "H") on day i have been right? nil until the days
+-- it needs are over (the newest, `last`, is still running) or without prices.
+-- HOLD: some day of the next `span` reaches q times day i's price.
+local function Right(kind, v, i, last, q, span)
+  local function V(k) return k >= 1 and k < last and v[k] or nil end
+  local now = V(i)
+  if not now then return nil end
+  if kind == "S" then
+    local later = V(i + 2)
+    if later then return later <= now end
+  elseif kind == "L" then
+    local a, b = V(i + 1), V(i + 2)
+    if a and b then return now >= (a + b) / 2 end
+  elseif span >= 1 and i + span < last then
+    for k = i + 1, i + span do if (V(k) or 0) >= now * q then return true end end
+    return false
+  end
+  return nil
+end
+
+-- How the advice did on this AH: { S = { n, right, base }, L = ..., H = ... }, base
+-- = how many the same rule would have got right on any day of those items.
+function A.Score()
+  local out = { S = { n = 0, right = 0, base = 0 }, L = { n = 0, right = 0, base = 0 }, H = { n = 0, right = 0, base = 0 } }
+  local house = ns.Prices.House()
+  local labels, at
+  for id, days in pairs(house and ns.acc.advice and ns.acc.advice[house] or {}) do
+    local h = ns.Prices.History(id)
+    if h then
+      if h.daily.labels ~= labels then
+        labels, at = h.daily.labels, {}
+        for i, k in ipairs(labels) do at[k] = i end
+      end
+      local v, last, keys, run, counted, expect = h.daily.values, #labels, {}
+      for day in pairs(days) do keys[#keys + 1] = day end
+      table.sort(keys)
+      for _, day in ipairs(keys) do
+        local r, i = days[day], at[day]
+        -- A run: the same advice on days in a row, or the same hold (its deadline stays while
+        -- its target moves). It counts once, from its first day with a price in the feed's window.
+        local key = r:gsub("^H,[^,]*", "H")
+        if key ~= run or day ~= expect and key:sub(1, 1) ~= "H" then run, counted = key, false end
+        expect = NextDay(day)
+        if not counted and i and v[i] then
+          counted = true
+          local kind, target, ends = r:match("^(%a),?(%d*),?(%d*)$")
+          local q, span = 1, 0  -- HOLD: the target (at least the day's price), days to the deadline
+          if kind == "H" then q, span = math.max(1, target / v[i]), (at[UTCDay(tonumber(ends))] or 0) - i end
+          local right = Right(kind, v, i, last, q, span)
+          if right ~= nil then
+            local c, yes, all = out[kind], 0, 0
+            c.n, c.right = c.n + 1, c.right + (right and 1 or 0)
+            for j = 1, last - 1 do
+              local any = Right(kind, v, j, last, q, span)
+              if any ~= nil then yes, all = yes + (any and 1 or 0), all + 1 end
+            end
+            c.base = c.base + yes / all
+          end
+        end
+      end
+    end
+  end
+  return out
+end
+
+local SCORED = { { "H", "holds reached target" }, { "S", "sells beat waiting 2 days" }, { "L", "lists beat the next 2 days" } }
+local function Pct100(x) return math.floor(x * 100 + 0.5) .. "%" end
+
+-- One line for the Sell tab, or nil until some kind of advice has SCORE_MIN judged.
+function A.ScoreText()
+  local s, parts = A.Score(), {}
+  for _, k in ipairs(SCORED) do
+    local c = s[k[1]]
+    if c.n >= SCORE_MIN then
+      parts[#parts + 1] = k[2] .. " " .. Pct100(c.right / c.n) .. " (any day " .. Pct100(c.base / c.n) .. ", n=" .. c.n .. ")"
+    end
+  end
+  return #parts > 0 and ("Advice, last " .. TRACK_DAYS .. " days: " .. table.concat(parts, "; ")) or nil
+end
+
 -- Decisions for everything owned on this realm, sorted by total value.
 -- Each entry: { id, name, qty, decision, total }
 function A.InventoryPlan()
-  local list = {}
+  local list, house, asOf, day = {}, ns.Prices.House(), nil, nil
   for id, owned in pairs(ns.Inventory.AllItems()) do
     local d = A.Decide(id, owned.total)
+    if house and d.asOf then
+      if d.asOf ~= asOf then asOf, day = d.asOf, UTCDay(d.asOf) end
+      Remember(house, id, d, day)
+    end
     local it = ns.acc.items[id] or {}
     list[#list + 1] = {
       id = id, name = it.name or ("item " .. id), qty = owned.total,
