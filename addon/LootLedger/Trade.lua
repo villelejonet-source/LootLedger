@@ -26,8 +26,9 @@ local DAY = 86400
 
 ---------------------------------------------------------------------------
 -- Storage: ns.acc.trade[realm|faction].items[itemID] = {
---   sales = { { t, n, net } },  lost = { { t, n, dep } },  posts = { { t, n, dep } },
+--   sales = { { t, n, net, wait } },  lost = { { t, n, dep } },  posts = { { t, n, dep } },
 --   tot = { soldN, soldNet, lostDep, boughtN, boughtCost, vendN, vendNet, ahN } }
+-- wait = seconds from the oldest open posting to taking the sale's gold (nil if unknown).
 ---------------------------------------------------------------------------
 local function StoreKey()
   local faction = UnitFactionGroup and UnitFactionGroup("player") or ""
@@ -109,7 +110,7 @@ function Tr.Sale(id, n, net, now)
   now = now or time()
   local e = Tr.Item(id, true)
   if n and n > 0 then
-    e.sales[#e.sales + 1] = { t = now, n = n, net = net }
+    e.sales[#e.sales + 1] = { t = now, n = n, net = net, wait = e.posts[1] and now - e.posts[1].t or nil }
     e.tot.soldN = e.tot.soldN + n
     e.tot.ahN = e.tot.ahN + n
     e.tot.soldNet = e.tot.soldNet + net
@@ -203,6 +204,30 @@ function Tr.Realized(id, now)
     if l.t >= oldest then wLost = wLost + W(l.t) * l.dep end
   end
   return math.max(0, (wNet - wLost) / wN), count, units
+end
+
+-- Your results for an item over the last 30 days (Market tab), or nil without any:
+-- { unit (Tr.Realized, nil without sales), sales (how many), sold (units sold on the
+--   AH), back (units that came back unsold), wait (median seconds from posting to
+--   taking the gold, nil if unknown) }
+function Tr.Results(id, now)
+  local e = Tr.Item(id)
+  if not e then return nil end
+  now = now or time()
+  local oldest = now - Tr.SETTINGS.windowDays * DAY
+  local out, waits = { sold = 0, back = 0 }, {}
+  out.unit, out.sales = Tr.Realized(id, now)
+  for _, s in ipairs(e.sales) do
+    if s.t >= oldest and not s.vendor then
+      out.sold = out.sold + s.n
+      if s.wait then waits[#waits + 1] = s.wait end
+    end
+  end
+  for _, l in ipairs(e.lost) do if l.t >= oldest then out.back = out.back + l.n end end
+  if not out.unit and out.sold + out.back == 0 then return nil end
+  table.sort(waits)
+  out.wait = waits[math.floor((#waits + 1) / 2)]
+  return out
 end
 
 -- Share of AH income eaten by failed listings lately, across all items (0..0.5).
