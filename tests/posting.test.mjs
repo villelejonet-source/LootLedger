@@ -15,7 +15,7 @@ const NORMAL = 1000; // recent normal price (the history's baseline), copper
 
 // Light Leather on house 113: `market`/`min` now, `listed` units, normal 1000 with
 // `trend` (per mille a day), vendor price `vendor`, optional sales line and queue
-// (units within 5% of the lowest), fill line ("p12,p24,p48,n" per mille), `owned` in the bank.
+// (units within 5% of the lowest), fill line ("p24,n", p24 per mille), `owned` in the bank.
 function vm({ market = 1000, min = market, listed = 300, vendor = 5, trend = 0, sales, queue, fill, owned = 0, before = "", files = FILES }) {
   const hist = `d=${[1000, 1000, 1000, 1000, 1000].map((v) => v.toString(36)).join(",")};t=${trend},${NORMAL.toString(36)},,`;
   return luaVM({ files, before: `
@@ -229,30 +229,46 @@ test("tooltip: the advice line has the price and chance, the tooltip got shorter
 // ---------------------------------------------------------------------------
 // Measured fill chances (the feed's fill table, poller/fill.mjs) replace the formula's guess
 // ---------------------------------------------------------------------------
-const FILL = "500,800,900,240"; // 50% within 12h, 80% within 24h, 90% within 48h; 240 start hours = 10 days
+const FILL = "800,240"; // 80% sold within 24h; 240 start hours = 10 days
+const formula = (qty, perDay = 240, queue = 29) => 1 - Math.exp(-perDay / (queue + qty));
 
 test("fill chance measured on this AH: one unit gets p24", () => {
   const { get, d } = decide({ sales: "200,240,50", queue: 29, fill: FILL }, 1);
   assert.ok(Math.abs(d("plan.chance") - 0.8) < 1e-9);
   assert.equal(d("plan.fillDays"), 10);
   assert.equal(d("unit"), value(999, 0.8, 2));
-  assert.deepEqual([get(`ns.Prices.Fill(${ID}).p12`), get(`ns.Prices.Fill(${ID}).p48`), get(`ns.Prices.Fill(${ID}).n`)], [0.5, 0.9, 240]);
-  assert.ok(Math.abs(decide({ queue: 29, fill: FILL }, 1).d("plan.chance") - 0.8) < 1e-9, "no sales data needed");
+  assert.deepEqual([get(`ns.Prices.Fill(${ID}).p24`), get(`ns.Prices.Fill(${ID}).n`)], [0.8, 240]);
+  assert.ok(Math.abs(decide({ queue: 29, fill: FILL }, 1).d("plan.chance") - 0.8) < 1e-9, "no sales data: p24 alone");
 });
 
-test("fill chance for a stack: the formula's rate solved from p24, so more units sell less surely", () => {
-  // 1 - exp(-r / 30) = 0.8, then 1 - exp(-r / 229) = 1 - 0.2 ^ (30 / 229)
+test("fill chance for a stack: the formula discounted by p24 / formula(1)", () => {
   const many = decide({ sales: "200,240,50", queue: 29, fill: FILL }, 200).d;
-  assert.ok(Math.abs(many("plan.chance") - (1 - 0.2 ** (30 / 229))) < 1e-9);
-  assert.ok(many("plan.chance") < 0.8);
-  // measured "never" still gives a finite relisting cost
-  assert.ok(Math.abs(decide({ queue: 29, fill: "0,0,0,240" }, 1).d("plan.chance") - 0.001) < 1e-9);
+  assert.ok(Math.abs(many("plan.chance") - formula(200) * 0.8 / formula(1)) < 1e-9);
+  // always sold measured for one unit: a stack still isn't sure to sell
+  const sure = decide({ sales: "200,240,50", queue: 29, fill: "1000,240" }, 200).d;
+  assert.ok(Math.abs(sure("plan.chance") - formula(200) / formula(1)) < 1e-9);
+  assert.ok(sure("plan.chance") < 0.7);
+});
+
+test("fill not used: over a stray lowest listing, or a measured 0", () => {
+  const stray = decide({ market: 1000, min: 800, sales: "200,240,50", queue: 29, fill: FILL }, 1).d;
+  assert.ok(Math.abs(stray("plan.chance") - formula(1, 240, 300)) < 1e-9, "posted at the AH price: the formula");
+  assert.equal(stray("plan.fillDays"), null);
+  const zero = decide({ sales: "200,240,50", queue: 29, fill: "0,240" }, 1).d;
+  assert.ok(Math.abs(zero("plan.chance") - formula(1)) < 1e-9);
+  assert.equal(zero("plan.fillDays"), null);
+});
+
+test("an item without a vendor price is never Vendor, however badly it sells", () => {
+  // 1 a day behind 200, the client's 1s50c deposit: worth less than 0 on the AH
+  const { d } = decide({ vendor: 0, sales: "1,1,1", queue: 200, fill: "0,240", before: CLIENT_DEPOSIT }, 1);
+  assert.notEqual(d("action"), "VENDOR");
 });
 
 test("no fill line, or a malformed one: the formula, as before", () => {
-  for (const fill of [undefined, "abc", "500,1200,900,240", "500,800,900", "500,800,900,0", "-1,800,900,240"]) {
+  for (const fill of [undefined, "abc", "1200,240", "800", "800,0", "-1,240", "500,800,900,240"]) {
     const { get, d } = decide({ sales: "200,240,50", queue: 29, fill }, 1);
-    assert.ok(Math.abs(d("plan.chance") - (1 - Math.exp(-8))) < 1e-9, String(fill));
+    assert.ok(Math.abs(d("plan.chance") - formula(1)) < 1e-9, String(fill));
     assert.equal(d("plan.fillDays"), null);
     assert.equal(get(`ns.Prices.Fill(${ID})`), null);
   }

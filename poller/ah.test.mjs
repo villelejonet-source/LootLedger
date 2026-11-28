@@ -221,8 +221,8 @@ test("F5: fill chances: a fill table only for commodities on archived houses wit
   else t.diagnostic("luaparse not installed: Prices.lua syntax not checked");
   const b113 = lua.slice(lua.indexOf("  [113] = "), lua.indexOf("  [114] = "));
   const b114 = lua.slice(lua.indexOf("  [114] = "), lua.indexOf("\n  },\n  spd"));
-  // starts with a full 48-hour window: the archived hours 48+ hours old
-  assert.match(b113, /\n    fill = \{\n\[2589\]="1000,1000,1000,173",\n    \},\n    trending = /);
+  // starts with a full 24 hours after them: the archived hours 24+ hours old
+  assert.match(b113, /\n    fill = \{\n\[2589\]="1000,197",\n    \},\n    trending = /);
   assert.doesNotMatch(b114, /fill/);
   const body = (b) => b.slice(b.indexOf("\n")).trimEnd(); // after the line with the house name
   assert.equal(body(b113).replace(/\n    fill = \{\n.*\n    \},/, ""), body(b114), "same block otherwise");

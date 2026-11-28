@@ -40,25 +40,25 @@ test("undercut and never bought: not filled; an hour without the item or without
   assert.equal(fillTime(...series([row(100), { ...row(100), span: 0 }, row(100, 1)]), 0), 2);
 });
 
-test("snapshot times wander: a fill up to half an hour past a window still counts", () => {
-  const rows = [row(100), ...Array(48).fill(row(100)), row(100, 1)];
-  const at = (last) => [rows.map((_, k) => T0 + (k === 49 ? last : k * HOUR)), rows];
-  assert.equal(fillTime(...at(48.4 * HOUR), 0), 48.4);
-  assert.equal(fillTime(...at(48.6 * HOUR), 0), Infinity);
-  // snapshots 62 minutes apart, bought every 12th: every start fills within 12.4 hours
-  const late = Array.from({ length: 230 }, (_, k) => ({ t: T0 + k * 62 * 60e3, rules: 2, d: { 2589: row(100, k % 12 ? 0 : 1) } }));
-  assert.deepEqual(fillChances(late)[2589].p, [1, 1, 1]);
+test("snapshot times wander: a fill up to half an hour past the 24 hours still counts", () => {
+  const rows = [row(100), ...Array(24).fill(row(100)), row(100, 1)];
+  const at = (last) => [rows.map((_, k) => T0 + (k === 25 ? last : k * HOUR)), rows];
+  assert.equal(fillTime(...at(24.4 * HOUR), 0), 24.4);
+  assert.equal(fillTime(...at(24.6 * HOUR), 0), Infinity);
+  // snapshots 61 minutes apart, bought every 24th: every start fills within 24.4 hours
+  const late = Array.from({ length: 230 }, (_, k) => ({ t: T0 + k * 61 * 60e3, rules: 2, d: { 2589: row(100, k % 24 ? 0 : 1) } }));
+  assert.equal(fillChances(late)[2589].p, 1);
 });
 
-test("start hours: one set (full 48h window) for all three numbers, enough of them, new sales rules only", () => {
+test("start hours: a full 24 hours after them, enough of them, new sales rules only", () => {
   // bought every hour: every start fills within the hour; starts near the end
-  // (no full window yet) must not count as unsold
-  assert.deepEqual(fillChances(hours(MIN_STARTS + 48, () => 1)), { 2589: { p: [1, 1, 1], n: MIN_STARTS } });
-  assert.deepEqual(fillChances(hours(MIN_STARTS + 47, () => 1)), {}, "too few start hours: nothing");
-  // bought every 20th hour: starts 8-19 hours into the cycle (96 of the 168) fill within 12 hours, all within 24
-  assert.deepEqual(fillChances(hours(MIN_STARTS + 48, (k) => (k % 20 ? 0 : 1))), { 2589: { p: [96 / 168, 1, 1], n: MIN_STARTS } });
+  // (24 hours not over yet) must not count as unsold
+  assert.deepEqual(fillChances(hours(MIN_STARTS + 24, () => 1)), { 2589: { p: 1, n: MIN_STARTS } });
+  assert.deepEqual(fillChances(hours(MIN_STARTS + 23, () => 1)), {}, "too few start hours: nothing");
+  // bought every 30th hour: starts 6-29 hours into the cycle fill within 24 hours (132 of the 168)
+  assert.deepEqual(fillChances(hours(MIN_STARTS + 24, (k) => (k % 30 ? 0 : 1))), { 2589: { p: 132 / 168, n: MIN_STARTS } });
   // hours counted under the old sales rules are ignored entirely
   const old = hours(60, () => 5, 1).map((h) => ({ ...h, t: h.t - 60 * HOUR }));
-  assert.deepEqual(fillChances([...old, ...hours(MIN_STARTS + 48, () => 0)]), { 2589: { p: [0, 0, 0], n: MIN_STARTS } });
-  assert.deepEqual(fillChances([...old, ...hours(MIN_STARTS + 47, () => 1)]), {});
+  assert.deepEqual(fillChances([...old, ...hours(MIN_STARTS + 24, () => 0)]), { 2589: { p: 0, n: MIN_STARTS } });
+  assert.deepEqual(fillChances([...old, ...hours(MIN_STARTS + 23, () => 1)]), {});
 });

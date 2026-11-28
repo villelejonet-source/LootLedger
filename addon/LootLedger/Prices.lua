@@ -50,17 +50,17 @@ function P.Queue(itemID, houseID)
   return type(q) == "number" and q or nil
 end
 
--- How often one unit posted 1c under the lowest price sold within 12/24/48 hours on
--- this house, measured by the feed (poller/fill.mjs): { p12, p24, p48 (0..1), n (start
--- hours behind them) }, or nil (house not archived, not enough data yet, or malformed).
+-- How often one unit posted 1c under the lowest price sold within 24 hours on this
+-- house, measured by the feed (poller/fill.mjs): { p24 (0..1), n (start hours behind
+-- it) }, or nil (house not archived, not enough data yet, or malformed).
 function P.Fill(itemID, houseID)
   local h = CurrentHouse(houseID)
   local s = h and type(h.fill) == "table" and h.fill[itemID]
   if type(s) ~= "string" then return nil end
-  local p12, p24, p48, n = s:match("^(%d+),(%d+),(%d+),(%d+)$")
-  p12, p24, p48, n = tonumber(p12), tonumber(p24), tonumber(p48), tonumber(n)
-  if not (p12 and p12 <= 1000 and p24 <= 1000 and p48 <= 1000 and n > 0) then return nil end
-  return { p12 = p12 / 1000, p24 = p24 / 1000, p48 = p48 / 1000, n = n }
+  local p24, n = s:match("^(%d+),(%d+)$")
+  p24, n = tonumber(p24), tonumber(n)
+  if not (p24 and p24 <= 1000 and n > 0) then return nil end
+  return { p24 = p24 / 1000, n = n }
 end
 
 P.TREND_LISTS = { "hot", "climbing", "drying", "cooling" }
