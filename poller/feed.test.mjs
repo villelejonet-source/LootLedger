@@ -97,3 +97,12 @@ test("security: a saved house block is reused only if it is plain data", () => {
   ];
   for (const b of bad) assert.equal(isHouseBlock(b, 114), false, b);
 });
+
+test("isHouseBlock rejects whitespace Lua 5.1 doesn't accept (no-break space, BOM)", async () => {
+  const { isHouseBlock } = await import("./feed.mjs");
+  const ok = `  [114] = { name = "A", faction = "Horde", updated = 1, listings = 5, days = 1, items = {\n[2589]="1,1,1,1,1",\n    } },`;
+  assert.equal(isHouseBlock(ok, 114), true);
+  assert.equal(isHouseBlock(ok.replace("= {", "=\u00a0{"), 114), false);
+  assert.equal(isHouseBlock("\ufeff" + ok, 114), false);
+  assert.equal(isHouseBlock(ok + "\u00a0", 114), false);
+});

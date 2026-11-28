@@ -101,8 +101,9 @@ const LUA_KEYWORDS = new Set(["and", "break", "do", "else", "elseif", "end", "fa
   "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while"]);
 export function isHouseBlock(text, house) {
   const tokens = [];
-  const re = /\s*(?:([{},=])|\[(\d+)\]|("(?:[^"\\\r\n]|\\["\\nr])*")|(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)|([A-Za-z_]\w*))/y;
-  const src = String(text).trimEnd();
+  // Only the whitespace Lua 5.1 accepts (a regex whitespace class would also match no-break spaces and BOMs).
+  const re = /[ \t\r\n]*(?:([{},=])|\[(\d+)\]|("(?:[^"\\\r\n]|\\["\\nr])*")|(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)|([A-Za-z_]\w*))/y;
+  const src = String(text).replace(/[ \t\r\n]+$/, "");
   while (re.lastIndex < src.length) {
     const m = re.exec(src);
     if (!m) return false;

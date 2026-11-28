@@ -318,3 +318,12 @@ test("A14: the median of the last 3 hours ships as `steady` for items with histo
   assert.equal(r.code, 0, r.out);
   assert.match(await r.lua(), /\n    steady = \{\n\[2589\]=60,\n    \},\n/, "Wool within 3%, Light Leather without history: not shipped");
 });
+
+test("a damaged hourly archive file never fails the run", async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const r = await runFeed({ houses: HOUSES.slice(0, 1), data: { 113: { auctions: [listing(1, 2589, 20, 50)] } } },
+    { [`113.hours.${today}.json.gz`]: { v: 1, fields: [], hours: "not a list" } }, { ARCHIVE_HOUSES: "113" });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /house 113: hourly archive skipped/);
+  assert.match(await r.lua(), /\[113\] = \{/);
+});

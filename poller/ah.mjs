@@ -273,9 +273,15 @@ for (const house of houses) {
   let fill = {};
   if (ARCHIVED.has(house.id)) {
     const dir = join(OUT_DIR, "history");
-    const a = fresh ? await archiveHour(dir, house.id, data.snapshot.t, data.items, sold, span, history) : { added: 0 };
-    const removed = await pruneArchive(dir, house.id, now);
-    console.log(`house ${house.id}: hourly archive +${a.added} items${fresh ? "" : " (no new snapshot)"}${removed ? `, ${removed} old days removed` : ""}`);
+    // Prune first, so a damaged old day file can't block every run; and like the
+    // fill chances below, an archive error never fails the run.
+    try {
+      const removed = await pruneArchive(dir, house.id, now);
+      const a = fresh ? await archiveHour(dir, house.id, data.snapshot.t, data.items, sold, span, history) : { added: 0 };
+      console.log(`house ${house.id}: hourly archive +${a.added} items${fresh ? "" : " (no new snapshot)"}${removed ? `, ${removed} old days removed` : ""}`);
+    } catch (e) {
+      console.log(`house ${house.id}: hourly archive skipped: ${e.message}`);
+    }
     // Fill chances replayed from the archive (poller/fill.mjs). Extra data: too little
     // of it, or any error here, just means no fill table, never a failed run.
     try {
