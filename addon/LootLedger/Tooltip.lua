@@ -17,12 +17,12 @@ local function AddLines(tooltip, id, needsShow)
   -- Prices
   local p = ns.Prices.Get(id)
   if p.hasAH then
-    local ah = ns.Prices.AHPrice(p)
+    local ah = d.ah or ns.Prices.AHPrice(p)  -- the price the advice went by (the last 3 hours' median)
     Row(tooltip, "AH price", ns.Money(ah) .. Grey(" each" .. (p.auctions and ("  (" .. p.auctions .. " listed)") or "")))
     local h = ns.Prices.History(id)
     local status = ns.Prices.Status()
     if h and h.baseline then
-      local vs = d.vs and string.format("  (%+d%%)", math.floor(d.vs * 100 + 0.5)) or ""
+      local vs = h.baseline > 0 and string.format("  (%+d%%)", math.floor((ah / h.baseline - 1) * 100 + 0.5)) or ""
       Row(tooltip, "Normal price", ns.Money(h.baseline) .. Grey(vs .. "  last few days"))
     elseif status.source == "blizzard" then
       Row(tooltip, "Normal price", Grey("building history (" .. (status.days or 0) .. (status.days == 1 and " day)" or " days)")))

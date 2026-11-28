@@ -256,3 +256,17 @@ test("A13: queue depth ships as a new table for items with history; existing lin
   assert.ok(salesLines.length > 0);
   for (const l of salesLines) assert.match(l, /^\[\d+\]="\d+,-?\d+,\d+",$/);
 });
+
+test("A14: the median of the last 3 hours ships as `steady` for items with history, where it is 3%+ off", async () => {
+  const now = Date.now(), H = 3600e3;
+  // Linen at 50 now, 70 and 60 the hours before (median 60); Wool at 100 now, 102 and 99 (median 100);
+  // Light Leather (2 listed, no history) at 300 now, 400 and 350 before.
+  const auctions = [listing(1, 2589, 20, 50), listing(2, 2592, 20, 100), listing(3, 2318, 2, 300)];
+  const q = (l, w, ll) => ({ 2589: [20, l], 2592: [20, w], 2318: [2, ll] });
+  const hours = [{ t: now - 2 * H, s: {}, q: q(70, 102, 400), diff: false }, { t: now - H, s: {}, q: q(60, 99, 350), diff: false }];
+  const lm = new Date(now).toUTCString();
+  const r = await runFeed({ houses: HOUSES.slice(0, 1), data: { 113: { auctions, lm, clm: lm } } },
+    { "113.json.gz": { days: {}, months: {}, hours, sales: {}, salesHours: {}, salesRules: 2 } });
+  assert.equal(r.code, 0, r.out);
+  assert.match(await r.lua(), /\n    steady = \{\n\[2589\]=60,\n    \},\n/, "Wool within 3%, Light Leather without history: not shipped");
+});

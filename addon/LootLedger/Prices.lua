@@ -167,6 +167,10 @@ local function FromFeed(itemID, c, houseID)
   c.updated = house.updated
   c.avg7 = tonumber(a7) > 0 and tonumber(a7) or nil
   c.historical = tonumber(a30) > 0 and tonumber(a30) or nil
+  -- The median of the last 3 hourly markets, where it differs (newer feeds): the
+  -- advice decides on it, as one hour's price is often noise.
+  local steady = type(house.steady) == "table" and house.steady[itemID]
+  c.steady = type(steady) == "number" and steady or nil
   return true
 end
 
@@ -394,7 +398,8 @@ end
 -- Everything known about an item's price. Fields can be nil.
 -- { vendor, market, min, recent, historical, avg7, auctions, soldPerDay,
 --   saleRate, region, hasAH = bool, source = "blizzard"|"tsm"|"scan"|nil,
---   updated = feed time, scanned = time of the scan the current numbers come from }
+--   updated = feed time, scanned = time of the scan the current numbers come from,
+--   steady = median market of the feed's last 3 hours, where it differs from market }
 -- houseID: read another house's prices (e.g. for an alt on the other faction).
 function P.Get(itemID, houseID)
   if not itemID then return { vendor = 0, hasAH = false } end
@@ -416,7 +421,7 @@ function P.Get(itemID, houseID)
     local market, min, qty = (scan.items[itemID] or ""):match("^(%d+),(%d+),(%d+)$")
     if market then
       c.market, c.recent, c.min, c.auctions = tonumber(market), tonumber(market), tonumber(min), tonumber(qty)
-      c.scanned = scan.t
+      c.scanned, c.steady = scan.t, nil
       c.source = c.source or "scan"
     end
   end
