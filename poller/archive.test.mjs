@@ -36,6 +36,7 @@ test("archiveHour keeps items bought 3+ a day lately, once per snapshot", async 
   assert.equal(back[0].d[2319].sold, 0);
   assert.equal(back[0].d[2318], undefined);
   assert.equal(back[1].d[2589].span, 0, "no comparison that hour");
+  assert.equal(back[0].rules, 2);
 });
 
 test("pruneArchive removes days older than 35, only for that house", async () => {

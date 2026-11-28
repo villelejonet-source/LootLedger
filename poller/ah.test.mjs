@@ -175,7 +175,7 @@ test("A11: hourly archive: only the chosen houses and items that trade 3+ a day"
   const auctions = [listing(1, 2589, 20, 50), listing(2, 2589, 5, 52), listing(3, 2589, 10, 62), listing(4, 2318, 2, 300)];
   const spec = { houses: HOUSES, data: { 113: { auctions }, 114: { auctions } } };
   const today = new Date().toISOString().slice(0, 10);
-  const sales = { sales: { [today]: { 2589: [50, 20, 2500] } }, salesHours: { [today]: 24 }, days: {}, months: {} };
+  const sales = { sales: { [today]: { 2589: [50, 20, 2500] } }, salesHours: { [today]: 24 }, salesRules: 2, days: {}, months: {} };
   const r = await runFeed(spec, { "113.json.gz": sales }, { ARCHIVE_HOUSES: "113" });
   assert.equal(r.code, 0, r.out);
   const files = await r.outHistory();
@@ -189,4 +189,15 @@ test("A11: hourly archive: only the chosen houses and items that trade 3+ a day"
   assert.deepEqual(a.hours[0].d[2589], [50, 50, 35, 3, 25, 25, 35, 0, 0, 0]);
   assert.equal(a.hours[0].d[2318], undefined, "never bought: not archived");
   assert.match(r.out, /house 113: hourly archive \+1 items/);
+});
+
+test("A12: the first run with new sales rules drops the old counts and says so", async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const old = { sales: { [today]: { 2589: [5000, 20, 2500] } }, salesHours: { [today]: 24 }, days: {}, months: {} };
+  const r = await runFeed({ houses: HOUSES.slice(0, 1), data: { 113: { auctions: [listing(1, 2589, 20, 50)] } } }, { "113.json.gz": old });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /house 113: sales counted under older rules dropped/);
+  const h = await r.read("113.json.gz");
+  assert.equal(h.salesRules, 2);
+  assert.equal(h.sales[today], undefined);
 });
