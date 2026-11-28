@@ -81,6 +81,32 @@ local function Render(filter)
   end
   if shown == 0 then rows[#rows + 1] = { kind = "note", text = "Nothing here right now." } end
 
+  -- Your auctions, as last seen at the AH (Auctions.lua): read only.
+  local live, seen = ns.Auctions.Live()
+  if live and #live > 0 then
+    local back = 0
+    for _, a in ipairs(live) do back = back + (a.back or 0) end
+    rows[#rows + 1] = { kind = "space", h = 6 }
+    rows[#rows + 1] = { kind = "section", text = "Your auctions  (" .. #live .. ")", right = "~" .. ns.Money(back) }
+    rows[#rows + 1] = { kind = "note", text = "As of " .. ns.Ago(time() - seen) .. ", at the AH. Expected back ~"
+      .. ns.Money(back) .. ": each auction's chance to sell before it ends, times its price after the AH cut plus the deposit back." }
+    for i, a in ipairs(live) do
+      if i > MAX_ROWS then rows[#rows + 1] = { kind = "note", text = "More auctions not shown." } break end
+      local it = ns.acc.items[a.id] or {}
+      local unit = math.floor(a.unit + 0.5)
+      local vs = not a.lowest and "no AH price"
+        or unit <= a.lowest and "lowest" or ns.Money(unit - a.lowest) .. " above the lowest"
+      local odds = a.chance and (", " .. math.floor(a.chance * 100 + 0.5) .. "% chance it sells before it ends")
+        or a.lowest and ", no sales data" or ""
+      rows[#rows + 1] = {
+        kind = "row", icon = T.ItemIcon(a.id), itemID = a.id,
+        label = T.QualityText(it.name or ns.ItemInfo(a.id) or ("item " .. a.id), it.quality) .. T.Color(" x" .. a.n, C.muted),
+        note = ns.Money(unit) .. " each, " .. vs .. odds,
+        value = a.back and ns.Money(a.back) or T.Color("?", C.muted),
+      }
+    end
+  end
+
   local scanned = ns.db.inv and ns.db.inv.scanned or {}
   rows[#rows + 1] = { kind = "space", h = 6 }
   rows[#rows + 1] = { kind = "note", text = "Bank last seen " ..
