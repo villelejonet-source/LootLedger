@@ -201,3 +201,31 @@ test("A12: the first run with new sales rules drops the old counts and says so",
   assert.equal(h.salesRules, 2);
   assert.equal(h.sales[today], undefined);
 });
+
+test("F5: fill chances: a fill table only for archived houses with enough archive, other lines unchanged", async () => {
+  // 220 archived hours of Linen, 1 bought every hour, ending an hour ago
+  const now = Date.now(), files = {};
+  for (let k = 220; k >= 1; k--) {
+    const t = now - k * 3600e3, f = `113.hours.${new Date(t).toISOString().slice(0, 10)}.json.gz`;
+    files[f] ??= { v: 1, fields: ["min", "market", "qty", "n", "q5", "q10", "q25", "sold", "gold", "span"], hours: [] };
+    files[f].hours.push({ t, r: 2, d: { 2589: [50, 50, 20, 1, 20, 20, 20, 1, 50, 1] } });
+  }
+  const spec = { houses: HOUSES, data: { 113: { auctions: [listing(1, 2589, 20, 50)] }, 114: { auctions: [listing(1, 2589, 20, 50)] } } };
+  const r = await runFeed(spec, files, { ARCHIVE_HOUSES: "113" });
+  assert.equal(r.code, 0, r.out);
+  const lua = await r.lua();
+  const b113 = lua.slice(lua.indexOf("  [113] = "), lua.indexOf("  [114] = "));
+  const b114 = lua.slice(lua.indexOf("  [114] = "), lua.indexOf("\n  },\n  spd"));
+  // starts with a full 48-hour window: the archived hours 48+ hours old
+  assert.match(b113, /\n    fill = \{\n\[2589\]="1000,1000,1000,173",\n    \},\n    trending = /);
+  assert.doesNotMatch(b114, /fill/);
+  const body = (b) => b.slice(b.indexOf("\n")).trimEnd(); // after the line with the house name
+  assert.equal(body(b113).replace(/\n    fill = \{\n.*\n    \},/, ""), body(b114), "same block otherwise");
+  assert.match(r.out, /house 113: fill chances for 1 items/);
+
+  // a corrupt archive day: no fill table, but the run goes on
+  const bad = await runFeed(spec, { ...files, [Object.keys(files)[0]]: "not gzip" }, { ARCHIVE_HOUSES: "113" });
+  assert.equal(bad.code, 0, bad.out);
+  assert.doesNotMatch(await bad.lua(), /fill = /);
+  assert.match(bad.out, /house 113: fill chances skipped/);
+});
