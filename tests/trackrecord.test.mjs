@@ -144,8 +144,34 @@ test("a run of the same advice counts once, from its first day; a hold once per 
   const daily = [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000];
   assert.equal(score(daily, one(`["${D(7)}"] = "S", ["${D(6)}"] = "S", ["${D(5)}"] = "S"`)).S, "1/1");
   assert.equal(score(daily, one(`["${D(7)}"] = "S", ["${D(6)}"] = "L", ["${D(5)}"] = "S"`)).S, "2/2");
-  const ends = BASE - 5 * DAY;
+  // A gap breaks a run: two separate spells of SELL count twice.
+  assert.equal(score(daily, one(`["${D(7)}"] = "S", ["${D(6)}"] = "S", ["${D(4)}"] = "S"`)).S, "2/2");
+  // A hold is one hold by its deadline, even with a day missing in between.
+  const ends = BASE - 4 * DAY;
   assert.equal(score(daily, one(`["${D(7)}"] = "H,1000,${ends}", ["${D(6)}"] = "H,1010,${ends}"`)).H, "1/1");
+  assert.equal(score(daily, one(`["${D(7)}"] = "H,1000,${ends}", ["${D(5)}"] = "H,1010,${ends}"`)).H, "1/1");
+});
+
+test("a run whose first day has no price, or is before the feed's days, is judged from its first day with one", () => {
+  //             7d    6d    5d   4d   3d   2d   1d  today
+  const daily = [1000, null, 1000, 900, 900, 900, 900, 900];
+  assert.equal(score(daily, one(`["${D(6)}"] = "S", ["${D(5)}"] = "S", ["${D(4)}"] = "S"`)).S, "1/1"); // from 5d: 1000 -> 900
+  assert.equal(score(daily, one(`["${D(9)}"] = "S", ["${D(8)}"] = "S", ["${D(7)}"] = "S"`)).S, "1/1"); // 9d, 8d: before the labels
+});
+
+test("any day: the same rule's rate on every judgeable day of the item", () => {
+  const daily = [1000, 1000, 950, 1100, 1000, 500];
+  const { get } = vm({ daily, advice: `{ [113] = { ${one(`["${D(5)}"] = "S", ["${D(4)}"] = "L"`)} } }` });
+  // SELL any day: 1000 -> 950 yes, 1000 -> 1100 no, 950 -> 1000 no: 1 in 3.
+  assert.equal(get("ns.Advisor.Score().S.base"), 1 / 3);
+  // LIST any day: 1000 vs 975 yes, 1000 vs 1025 no, 950 vs 1050 no: 1 in 3.
+  assert.equal(get("ns.Advisor.Score().L.base"), 1 / 3);
+});
+
+test("old table-format records are dropped at login, not crashed on", () => {
+  const { get } = vm({ advice: `{ [113] = { [${ID}] = { ["${D(5)}"] = { a = "SELL", ah = 1000 }, ["${D(4)}"] = "S" } } }` });
+  assert.equal(days(get), `${D(4)}=S`);
+  assert.equal(get("ns.Advisor.ScoreText()"), null);
 });
 
 test("several items, one without a history any more: only the others are judged", () => {

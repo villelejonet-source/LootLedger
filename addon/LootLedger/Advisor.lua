@@ -438,11 +438,16 @@ local function UTCDay(t)
   return string.format("%04d-%02d-%02d", u.year, u.month, u.day)
 end
 
+local function NextDay(day)
+  local y, m, d = day:match("^(%d+)-(%d+)-(%d+)$")
+  return UTCDay(time({ year = tonumber(y), month = tonumber(m), day = tonumber(d) + 1, hour = 12 }))
+end
+
 ns.OnInit(function()
   local oldest = UTCDay(time() - TRACK_DAYS * 86400)
   for house, items in pairs(ns.acc.advice or {}) do
     for id, days in pairs(items) do
-      for day in pairs(days) do if day < oldest then days[day] = nil end end
+      for day, r in pairs(days) do if day < oldest or type(r) ~= "string" then days[day] = nil end end
       if not next(days) then items[id] = nil end
     end
     if not next(items) then ns.acc.advice[house] = nil end
@@ -499,16 +504,21 @@ function A.Score()
         labels, at = h.daily.labels, {}
         for i, k in ipairs(labels) do at[k] = i end
       end
-      local v, last, keys, prev = h.daily.values, #labels, {}, nil
+      local v, last, keys, run, counted, expect = h.daily.values, #labels, {}
       for day in pairs(days) do keys[#keys + 1] = day end
       table.sort(keys)
       for _, day in ipairs(keys) do
         local r, i = days[day], at[day]
-        local run = r:gsub("^H,[^,]*", "H")  -- a hold keeps its deadline while its target moves
-        if run ~= prev and i then
+        -- A run: the same advice on days in a row, or the same hold (its deadline stays while
+        -- its target moves). It counts once, from its first day with a price in the feed's window.
+        local key = r:gsub("^H,[^,]*", "H")
+        if key ~= run or day ~= expect and key:sub(1, 1) ~= "H" then run, counted = key, false end
+        expect = NextDay(day)
+        if not counted and i and v[i] then
+          counted = true
           local kind, target, ends = r:match("^(%a),?(%d*),?(%d*)$")
           local q, span = 1, 0  -- HOLD: the target (at least the day's price), days to the deadline
-          if kind == "H" then q, span = v[i] and math.max(1, target / v[i]) or 1, (at[UTCDay(tonumber(ends))] or 0) - i end
+          if kind == "H" then q, span = math.max(1, target / v[i]), (at[UTCDay(tonumber(ends))] or 0) - i end
           local right = Right(kind, v, i, last, q, span)
           if right ~= nil then
             local c, yes, all = out[kind], 0, 0
@@ -520,7 +530,6 @@ function A.Score()
             c.base = c.base + yes / all
           end
         end
-        prev = run
       end
     end
   end
