@@ -61,7 +61,7 @@ local function LastChange(values)
   return last and prev and (last / prev - 1) or nil
 end
 
-local SupplyRows, TimeOfWeekRows  -- defined below Render
+local SupplyRows, TimeOfWeekRows, PostRows  -- defined below Render
 
 local function Empty()
   local rows = {
@@ -135,6 +135,7 @@ local function Render(view)
     VENDOR = { 0.75, 0.75, 0.75, 1 }, KEEP = C.muted }
   rows[#rows + 1] = { kind = "row", badge = { text = ns.Advisor.ACTIONS[d.action].label, color = badgeColors[d.action] },
     label = d.reason, value = d.unit and d.unit > 0 and (ns.Money(d.unit) .. T.Color(" each", C.muted)) or "" }
+  PostRows(rows, d)
 
   if not h then
     rows[#rows + 1] = { kind = "note", text = p.hasAH
@@ -208,6 +209,27 @@ local function Render(view)
 
   TimeOfWeekRows(rows)
   return SupplyRows(rows, id, p, h)
+end
+
+-- Posting it: the suggested price, its floor, the queue you would join, and per
+-- auction length the deposit, the chance to sell and the expected net (Advisor.PostPlan).
+function PostRows(rows, d)
+  local pl = d.plan
+  if not pl then return end
+  local floor = d.floor or pl.vendorFloor
+  rows[#rows + 1] = { kind = "section", text = "Posting", right = T.Color("you post it yourself", C.muted) }
+  rows[#rows + 1] = { kind = "row", label = "Suggested price", note = "1c under the lowest listing, " .. ns.Money(pl.lowest),
+    value = d.post and ns.Money(d.post) or T.Color("not now", C.muted) }
+  rows[#rows + 1] = { kind = "row", label = "Floor", value = ns.Money(floor),
+    note = floor > pl.vendorFloor and "85% of the normal price" or "the least that beats vendoring, after the cut and deposit risk" }
+  rows[#rows + 1] = { kind = "row", label = "Queue you would join", value = pl.queue .. " + your " .. pl.qty,
+    note = "units within 5% of the lowest; " .. (pl.perDay and ("buyers take ~" .. math.floor(pl.perDay + 0.5) .. " a day") or "no sales data yet") }
+  for _, e in ipairs(pl.by) do
+    rows[#rows + 1] = { kind = "row", label = e.hours .. "h auction",
+      note = "deposit " .. ns.Money(e.deposit) .. (e.chance and e == pl.best and ", best" or ""),
+      value = (e.chance and (math.floor(e.chance * 100 + 0.5) .. "% sells, ") or "")
+        .. (e.net < 0 and ns.Signed(math.floor(e.net)) or ns.Money(e.net)) .. T.Color(" each", C.muted) }
+  end
 end
 
 -- The whole auction house by hour of the week: when do items list highest and lowest?

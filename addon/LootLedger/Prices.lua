@@ -41,6 +41,14 @@ function P.Sales(itemID)
   return { sold24 = tonumber(sold), normal = normal >= 0 and normal or nil, auctions24 = tonumber(auctions) }
 end
 
+-- Units listed within 5% of the lowest price (the queue a new listing joins), or
+-- nil if the feed doesn't say (older feeds; items without history).
+function P.Queue(itemID)
+  local h = CurrentHouse()
+  local q = h and type(h.queue) == "table" and h.queue[itemID]
+  return type(q) == "number" and q or nil
+end
+
 P.TREND_LISTS = { "hot", "climbing", "drying", "cooling" }
 
 local trendCache
