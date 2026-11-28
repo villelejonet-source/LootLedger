@@ -128,6 +128,54 @@ test("security: hostile IDs and numbers from Saddlebag or Blizzard never reach P
   assert.match(lua, /\[2589\]="50,50,5,/);
 });
 
+test("security: history, snapshot and saved blocks read back from the history branch can't put code into Prices.lua", async (t) => {
+  const now = Date.now(), H = 3600e3, today = new Date(now).toISOString().slice(0, 10);
+  const evil = '" } } PWNED() x = { { "';
+  const history = {
+    days: { [evil]: { 2589: [1, 1, 1, 1] }, [today]: { 2589: [50, 1, 50, 20, Math.log(50), 1], [evil]: [1, 1, 1, 1] } },
+    months: { [`2026-10${evil}`]: { 2589: [10, 1] }, "2026-10": { 2589: ["1e3 PWNED()", 1] } },
+    hours: [3, 2].map((k) => ({ t: now - k * H, s: { 2589: [1, `1${evil}`, 100], [evil]: [1, 1, 1] }, q: { 2589: [20, "0x7F"] }, diff: true, h: 1 })),
+    sales: { [today]: { 2589: [`1${evil}`, 1, 1] } }, salesHours: { [evil]: 24 }, salesRules: 2,
+    index: [{ t: `1${evil}`, v: 1 }],
+  };
+  const snap = { t: now - H, l: [[1, `2589]=1 PWNED() --`, 5, 50, 2, 1], [2, 2589, `30${evil}`, 50, 2, 1], [3, 2589, 30, 50, 2, 1]] };
+  // House 114 fails this hour; its saved block closes the table and calls a function.
+  const block = `  [114] = { name = "A", faction = "Alliance", updated = ${Math.floor(now / 1000)}, listings = 5, days = 1, items = {} }, PWNED() x = { {`;
+  const lm = new Date(now).toUTCString();
+  const r = await runFeed(
+    { houses: HOUSES, data: { 113: { auctions: [listing(1, 2589, 20, 50)], lm, clm: lm }, 114: { status: 500 } } },
+    { "113.json.gz": history, "113.snap.json.gz": snap, "114.block.lua": block },
+  );
+  assert.equal(r.code, 0, r.out);
+  const lua = await r.lua();
+  assert.ok(!lua.includes("PWNED"), lua);
+  assert.match(lua, /\[113\] = \{ name = "Horde Thunderstrike"/);
+  assert.doesNotMatch(lua, /\[114\] = \{/);
+  assert.match(r.out, /house 114 .*not plain data, not used/);
+  const luaparse = await import("luaparse").then((m) => m.default, () => null);
+  if (luaparse) assert.deepEqual(luaparse.parse(lua, { luaVersion: "5.1" }).body.map((s) => s.type), ["AssignmentStatement"]);
+  else t.diagnostic("luaparse not installed: Prices.lua syntax not checked");
+});
+
+test("security: region and ruleset must be two letters and a whole number", async () => {
+  const spec = { houses: HOUSES.slice(0, 1), data: { 113: { auctions: [listing(1, 2589, 20, 50)] } } };
+  for (const env of [{ BNET_REGION: 'eu", PWNED() --' }, { AH_RULESET: "2 PWNED()" }]) {
+    const r = await runFeed(spec, {}, env);
+    assert.notEqual(r.code, 0, r.out);
+    assert.match(r.out, /must be/);
+  }
+});
+
+test("security: Saddlebag's sales per day are capped, and an oversized answer is not read", async () => {
+  const spec = { houses: HOUSES.slice(0, 1), data: { 113: { auctions: [listing(1, 2589, 20, 50)] } }, saddlebag: [{ itemID: 2600, salesPerDay: 1e300 }] };
+  const r = await runFeed(spec);
+  assert.equal(r.code, 0, r.out);
+  assert.match(await r.lua(), /\[2600\]=1000000,/);
+  const big = await runFeed({ ...spec, saddlebag: Array.from({ length: 1.2e6 }, (_, i) => ({ itemID: i + 1, salesPerDay: 1.5, pad: "x".repeat(10) })) });
+  assert.equal(big.code, 0, big.out);
+  assert.match(big.out, /Saddlebag sales per day unavailable: answer over 32 MB/);
+});
+
 test("A8: time of week: the hourly market index is kept, and each house gets its week profile", async () => {
   // 40 items with a price yesterday; today they list 10% higher.
   const yesterday = new Date(Date.now() - 86400e3).toISOString().slice(0, 10);

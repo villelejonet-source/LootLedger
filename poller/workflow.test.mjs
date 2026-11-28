@@ -12,14 +12,16 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const YML = readFileSync(join(HERE, "..", ".github", "workflows", "prices.yml"), "utf8").replace(/\r/g, "");
 
-// The steps of the one job: [{ name, if, run, raw }] in order.
-function steps() {
+// The steps of the prices job (or another job): [{ name, if, run, raw }] in order.
+function steps(want = "prices") {
   const out = [];
   const lines = YML.split("\n");
-  let cur = null;
+  let cur = null, job = null;
   for (let i = 0; i < lines.length; i++) {
+    const j = lines[i].match(/^  ([\w-]+):$/);
+    if (j) { job = j[1]; cur = null; continue; }
     const m = lines[i].match(/^      - (name: (.*)|uses: .*)$/);
-    if (m) { cur = { name: m[2] ?? m[1], raw: [] }; out.push(cur); continue; }
+    if (m) { cur = { name: m[2] ?? m[1], raw: [] }; if (job === want) out.push(cur); continue; }
     if (!cur) continue;
     cur.raw.push(lines[i]);
     const kv = lines[i].match(/^        (if|continue-on-error|run): (.*)$/);
@@ -122,4 +124,27 @@ test("A8b: with no other run waiting, the next run is started", () => {
   const r = runStep("Start the next run", tmp(), { PATH, Path: PATH, RUN_ID: "1" });
   assert.equal(r.code, 0, r.out);
   assert.match(readFileSync(log, "utf8"), /workflow run/, r.out);
+});
+
+test("M2: npm runs only in the tests job; the prices job starts the next run even if the tests failed", () => {
+  const prices = YML.slice(YML.indexOf("\n  prices:\n"));
+  assert.match(prices, /^    needs: tests$/m);
+  assert.match(prices, /^    if: always\(\)$/m);
+  assert.ok(!steps().some((s) => /\bnpm\b/.test(s.run ?? "")), "no npm in the job holding the secrets");
+  assert.ok(steps("tests").some((s) => /npm ci/.test(s.run ?? "")));
+  const n = names();
+  assert.equal(n.at(-1), "Start the next run");
+  assert.equal(step("Start the next run").if, "always()");
+});
+
+test("L1: the release tag is passed as a variable and checked before gh is called", () => {
+  const { PATH, log } = stubs({ ghListFails: false });
+  assert.doesNotMatch(step("Publish release").run, /\$\{\{/, "no expressions pasted into the script");
+  const bad = runStep("Publish release", tmp(), { PATH, Path: PATH, TAG: 'v1.0-1"; touch pwned; "', TITLE: "t" });
+  assert.notEqual(bad.code, 0, bad.out);
+  assert.match(bad.out, /Unexpected release tag/);
+  assert.ok(!existsSync(log), "gh not called");
+  const good = runStep("Publish release", tmp(), { PATH, Path: PATH, TAG: "v3.15.0-202611281235", TITLE: "t" });
+  assert.equal(good.code, 0, good.out);
+  assert.match(readFileSync(log, "utf8"), /release create/);
 });

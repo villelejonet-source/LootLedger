@@ -90,3 +90,42 @@ export function toPositive(x) {
   const n = typeof x === "string" && x.trim() !== "" ? Number(x) : x;
   return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : null;
 }
+
+// Is `text` one house block of Prices.lua (`[house] = { ... },`) holding nothing
+// but data? A block saved by an earlier run (history/<house>.block.lua) is put back
+// into Prices.lua as it is, and the history branch it comes from could have been
+// changed, so it must not be able to run anything in the game. Allowed: tables,
+// keys (`name =`, `[123] =`), numbers, true/false and strings as luaEscape writes
+// them. No calls, names as values, operators or comments get through.
+const LUA_KEYWORDS = new Set(["and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if", "in",
+  "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while"]);
+export function isHouseBlock(text, house) {
+  const tokens = [];
+  const re = /\s*(?:([{},=])|\[(\d+)\]|("(?:[^"\\\r\n]|\\["\\nr])*")|(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)|([A-Za-z_]\w*))/y;
+  const src = String(text).trimEnd();
+  while (re.lastIndex < src.length) {
+    const m = re.exec(src);
+    if (!m) return false;
+    tokens.push(m[1] ? { k: m[1] } : m[2] ? { k: "[]", v: m[2] } : m[3] ? { k: "str" } : m[4] ? { k: "num" } : { k: "name", v: m[5] });
+  }
+  let i = 0;
+  const value = (depth) => {
+    const t = tokens[i++];
+    if (t?.k === "{") return depth < 8 && table(depth + 1);
+    return t?.k === "str" || t?.k === "num" || (t?.k === "name" && (t.v === "true" || t.v === "false"));
+  };
+  const table = (depth) => { // just after "{"
+    for (;;) {
+      if (tokens[i]?.k === "}") { i++; return true; }
+      const t = tokens[i];
+      if ((t?.k === "[]" || (t?.k === "name" && !LUA_KEYWORDS.has(t.v))) && tokens[i + 1]?.k === "=") i += 2;
+      if (!value(depth)) return false;
+      const sep = tokens[i++]?.k;
+      if (sep === "}") return true;
+      if (sep !== ",") return false;
+    }
+  };
+  if (!(tokens[0]?.k === "[]" && tokens[0].v === String(house) && tokens[1]?.k === "=" && tokens[2]?.k === "{")) return false;
+  i = 3;
+  return table(1) && tokens[i]?.k === "," && i + 1 === tokens.length;
+}

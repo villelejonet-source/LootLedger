@@ -1,7 +1,7 @@
 // node --test poller/history.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addSnapshot, archiveOldDays, allDays, monthKeys, monthlyFor, seriesFor, encodeHistory, labels, recentMedians, dayMarket } from "./history.mjs";
+import { addSnapshot, archiveOldDays, allDays, monthKeys, monthlyFor, seriesFor, encodeHistory, labels, recentMedians, dayMarket, cleanHistory } from "./history.mjs";
 import { trend } from "./analysis.mjs";
 
 const DAY = 86400e3;
@@ -109,4 +109,36 @@ test("encodeHistory uses the monthly series it is given", () => {
   const enc = encodeHistory(seriesFor(h, days, "1"), monthlyFor(h, days, "1", keys));
   assert.match(enc, /;m=32;/); // 110 (109.5 rounded) in base 36
   assert.match(labels(days, keys), /monthLabels = \{ "2026-07" \}/);
+});
+
+test("security: history read back from the branch keeps only keys and numbers of the expected shape", () => {
+  const evil = '" } PWNED() x = { "';
+  const h = cleanHistory({
+    days: { "2026-11-27": { 2589: [10, 1, 10, 1, null, 0], [evil]: [1, 1], 2318: [1, "1 PWNED()"] }, [evil]: { 2589: [1, 1] }, "2026-13-45": {} },
+    months: { "2026-10": { 2589: [10, 1] }, ['2026-10" } PWNED() --']: { 2589: [10, 1] } },
+    hours: [{ t: 1, s: { 2589: [1, '1" PWNED() x="', 100], 2318: [1, 1, 1] }, q: { 2589: [20, "0x7F"] }, diff: true, h: 1 }, { t: "x", s: {}, q: {} }, { t: 2, h: "1", s: {}, q: {} }],
+    sales: { "2026-11-27": { 2589: [1, 1, 1], 2318: [Infinity, 1, 1] }, [evil]: {} },
+    salesHours: { "2026-11-27": 24, [evil]: 24, "2026-11-28": "24" },
+    index: [{ t: 1, v: 0.1 }, { t: 2, v: "0.1" }, { t: 3, v: 0.1, g: "x" }],
+  });
+  assert.deepEqual(h.days, { "2026-11-27": { 2589: [10, 1, 10, 1, null, 0] } });
+  assert.deepEqual(h.months, { "2026-10": { 2589: [10, 1] } });
+  assert.deepEqual(h.hours, [{ t: 1, s: { 2318: [1, 1, 1] }, q: {}, diff: true, h: 1 }]);
+  assert.deepEqual(h.sales, { "2026-11-27": { 2589: [1, 1, 1] } });
+  assert.deepEqual(h.salesHours, { "2026-11-27": 24 });
+  assert.deepEqual(h.index, [{ t: 1, v: 0.1 }]);
+  // Fields an older file doesn't have stay missing; something that isn't an object starts empty.
+  assert.deepEqual(cleanHistory({ days: {} }), { days: {}, months: {} });
+  assert.deepEqual(cleanHistory([1]), { days: {}, months: {} });
+});
+
+test("security: labels are escaped, month keys checked, and only real numbers make a 3-hour median", () => {
+  const h = { days: {}, months: { "2026-10": {}, '2026-09" } PWNED() --': {} } };
+  assert.deepEqual(monthKeys(h, []), ["2026-10"]);
+  assert.match(labels([], ['a"b']), /monthLabels = { "a\\"b" }/);
+  const t = Date.parse("2026-11-28T12:00:00Z");
+  const hours = (v) => [0, 1, 2].map((i) => ({ t: t - i * 3600e3, q: { 5: [1, v] } }));
+  assert.deepEqual(recentMedians(hours("0x7F")), {});
+  assert.deepEqual(recentMedians(hours(Infinity)), {});
+  assert.deepEqual(recentMedians(hours(7)), { 5: 7 });
 });

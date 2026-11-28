@@ -7,6 +7,8 @@
 // history.salesHours (hours of data per day), and the current items { id: { market, qty } }.
 
 import { baseline } from "./analysis.mjs";
+import { int } from "./history.mjs";
+import { toId } from "./feed.mjs";
 
 const HOUR = 3600e3;
 const GOLD = 10000; // copper
@@ -52,7 +54,8 @@ export function itemStats(history, items, now, S = TREND) {
     .slice(-S.baselineDays);
 
   const ids = new Set(Object.keys(items));
-  for (const h of hours) for (const id of Object.keys(h.s)) ids.add(id);
+  // Only whole-number IDs: they go into Prices.lua as table keys.
+  for (const h of hours) for (const id of Object.keys(h.s)) if (toId(id)) ids.add(id);
 
   const stats = new Map();
   for (const id of ids) {
@@ -154,7 +157,8 @@ export function readyAt(history, now, S = TREND) {
 }
 
 // Compact form for the game: "id,sold24,auctions24,normal,pricePermille,supplyPermille,hoursActive,conf"
+// Every field is made a whole number here: the entry is written into Prices.lua.
 export function encodeEntry(e) {
   const pm = (x) => (x == null || !Number.isFinite(x) ? "" : String(Math.round(x * 1000)));
-  return [e.id, e.sold24, e.auctions24, Math.round(e.normal ?? 0), pm(e.priceChange), pm(e.supplyChange), e.hoursActive, e.conf].join(",");
+  return [int(e.id), int(e.sold24), int(e.auctions24), int(e.normal ?? 0), pm(e.priceChange), pm(e.supplyChange), int(e.hoursActive), int(e.conf)].join(",");
 }

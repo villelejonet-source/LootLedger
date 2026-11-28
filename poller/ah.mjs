@@ -19,7 +19,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { dayKey } from "./analysis.mjs";
-import { carryOverHistory, readGzJson, fetchRetry, diffPlausible, snapshotTime, luaEscape, toId, toPositive } from "./feed.mjs";
+import { carryOverHistory, readGzJson, fetchRetry, diffPlausible, snapshotTime, luaEscape, toId, toPositive, isHouseBlock } from "./feed.mjs";
 import { TIME_LEFT, toSnapshot, diffSnapshots, recordHour, resetSales } from "./sales.mjs";
 import { trendingLists, encodeEntry } from "./trending.mjs";
 import { recordIndex, marketIndex, backfillIndex, hourProfile, encodeWeekHours } from "./weekhours.mjs";
@@ -27,6 +27,7 @@ import { archiveHour, pruneArchive, depth, readArchive } from "./archive.mjs";
 import { fillChances } from "./fill.mjs";
 import {
   addSnapshot, archiveOldDays, allDays, seriesFor, average, encodeHistory, labels, monthKeys, monthlyFor, recentMedians,
+  cleanHistory, int,
 } from "./history.mjs";
 
 const {
@@ -43,6 +44,9 @@ const {
 if (!BNET_CLIENT_ID || !BNET_CLIENT_SECRET) throw new Error("Set BNET_CLIENT_ID and BNET_CLIENT_SECRET");
 
 const REGION = BNET_REGION.toLowerCase();
+// Both come from repository variables and are written into Prices.lua (the region also into the API host).
+if (!/^[a-z]{2}$/.test(REGION)) throw new Error(`BNET_REGION must be two letters, not "${BNET_REGION}"`);
+if (!/^\d+$/.test(AH_RULESET)) throw new Error(`AH_RULESET must be a whole number, not "${AH_RULESET}"`);
 const ARCHIVED = new Set(ARCHIVE_HOUSES.split(",").map((s) => Number(s.trim())).filter(Boolean));
 const NAMESPACE = `dynamic-forever-${REGION}`;
 const MARKET_SHARE = 0.15;         // market value = average of the cheapest 15% of units
@@ -50,6 +54,8 @@ const HIST_MIN_SOLD_PER_DAY = 5;   // per-item history only for items that actua
 const HIST_MIN_LISTED = 20;        // ...or have a real market on that house
 const ADDON = "LootLedger_Prices";
 const LAST_GOOD_MAX_AGE = 2 * 86400; // seconds a failed house may reuse its last good prices
+const MAX_SPD = 1e6;                 // sales per day above this are a bad answer: capped
+const MAX_SADDLEBAG_BYTES = 32e6;    // Saddlebag's answer is a few MB; a bigger one isn't read
 
 // ---------------------------------------------------------------------------
 // Blizzard API
@@ -140,18 +146,20 @@ async function fetchHouse(house, accessToken) {
 
 // Previous hour's listings, to see what was bought since. Only a missing file means
 // "none"; a corrupt or unreadable one stops the run instead of losing data.
+// It comes back from the history branch like the history: listings that aren't
+// rows of numbers with a whole-number item ID are dropped (what was bought ends up in Prices.lua).
 async function loadSnapshot(house) {
-  return readGzJson(join(HISTORY_DIR, `${house}.snap.json.gz`));
+  const snap = await readGzJson(join(HISTORY_DIR, `${house}.snap.json.gz`));
+  if (snap == null || !Number.isFinite(snap.t) || !Array.isArray(snap.l)) return null;
+  snap.l = snap.l.filter((a) => Array.isArray(a) && a.length >= 5 && a.every(Number.isFinite) && toId(a[1]));
+  return snap;
 }
 
 // ---------------------------------------------------------------------------
 // History files
 // ---------------------------------------------------------------------------
 async function loadHistory(house) {
-  const h = (await readGzJson(join(HISTORY_DIR, `${house}.json.gz`))) ?? {};
-  h.days ??= {};
-  h.months ??= {};
-  return h;
+  return cleanHistory((await readGzJson(join(HISTORY_DIR, `${house}.json.gz`))) ?? {});
 }
 
 // ---------------------------------------------------------------------------
@@ -166,12 +174,19 @@ async function salesPerDay() {
       signal: AbortSignal.timeout(60_000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const rows = await res.json();
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of res.body ?? []) {
+      size += chunk.length;
+      if (size > MAX_SADDLEBAG_BYTES) throw new Error(`answer over ${MAX_SADDLEBAG_BYTES / 1e6} MB`);
+      chunks.push(chunk);
+    }
+    const rows = JSON.parse(Buffer.concat(chunks).toString());
     const out = {};
     // A third-party service: keep only whole-number IDs and real numbers (Prices.lua is code).
     for (const r of Array.isArray(rows) ? rows : []) {
       const id = toId(r?.itemID), n = toPositive(r?.salesPerDay);
-      if (id && n) out[id] = Math.round(n);
+      if (id && n) out[id] = Math.round(Math.min(n, MAX_SPD));
     }
     return out;
   } catch (e) {
@@ -209,6 +224,10 @@ async function keepLastGood(house) {
   }
   const updated = Number(block.match(/ updated = (\d+), listings = /)?.[1]);
   if (!updated || now / 1000 - updated > LAST_GOOD_MAX_AGE) return;
+  if (!isHouseBlock(block, house.id)) {
+    console.log(`house ${house.id} ${house.name}: its last good prices are not plain data, not used`);
+    return;
+  }
   houseBlocks.push(block);
   console.log(`house ${house.id} ${house.name}: kept its last good prices (${new Date(updated * 1000).toISOString().slice(0, 16)}Z)`);
 }
@@ -278,7 +297,7 @@ for (const house of houses) {
     .map(([k, list]) => `${k} = { ${list.map((e) => `"${encodeEntry(e)}"`).join(", ")} }`).join(",\n      ");
   const salesLines = [];
   for (const s of trend.stats.values()) {
-    if (s.sold24 > 0 || (s.normal ?? 0) > 0) salesLines.push(`[${s.id}]="${s.sold24},${Math.round(s.normal ?? -1)},${s.auctions24}",`);
+    if (s.sold24 > 0 || (s.normal ?? 0) > 0) salesLines.push(`[${s.id}]="${int(s.sold24)},${int(s.normal ?? -1)},${int(s.auctions24)}",`);
   }
   const soldUnits = sold ? [...sold.values()].reduce((a, e) => a + e.units, 0) : 0;
 
@@ -295,7 +314,7 @@ for (const house of houses) {
       // Units listed within 5% of the lowest price: the queue a new listing joins.
       queueLines.push(`[${id}]=${s.depth[0]},`);
       // The median of the last 3 hours, where it is 3%+ off this hour's market.
-      if (steady[id] != null && Math.abs(steady[id] / s.market - 1) >= 0.03) steadyLines.push(`[${id}]=${steady[id]},`);
+      if (steady[id] != null && Math.abs(steady[id] / s.market - 1) >= 0.03) steadyLines.push(`[${id}]=${int(steady[id])},`);
     }
   }
   const daysOfHistory = Object.keys(history.days).length;
@@ -312,6 +331,14 @@ for (const house of houses) {
     `    trending = { ready = ${trend.ready}, hoursOfData = ${trend.coverage}, baselineDays = ${trend.baselineDays},` +
     (trend.readyAt ? ` readyAt = ${Math.floor(trend.readyAt / 1000)},` : "") + `\n      ${listLua} } },`
   );
+  // The check a saved block gets (keepLastGood), on every new block too: whatever
+  // the history held, only data reaches Prices.lua.
+  if (!isHouseBlock(block, house.id)) {
+    console.log(`house ${house.id} ${house.name}: its new prices are not plain data, not used`);
+    housesRead--;
+    await keepLastGood(house);
+    continue;
+  }
   houseBlocks.push(block);
   await writeFile(join(OUT_DIR, "history", `${house.id}.block.lua`), block);
   console.log(`house ${house.id} ${house.name}: ${data.listings} listings, ${lines.length} items (${histLines.length} with history), ${daysOfHistory} days of history; ` +
