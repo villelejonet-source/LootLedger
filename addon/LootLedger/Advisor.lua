@@ -179,6 +179,7 @@ local function Value(price, plan)
 end
 
 -- { lowest, price (suggested), queue, qty, perDay, chance (nil without sales data),
+--   fillDays (chance measured on this AH over that many days; nil = the formula's estimate),
 --   deposit, estimated (deposit is our estimate), vendorFloor (the least that beats vendoring) }
 -- house: another house's prices (nil = this character's).
 function A.PostPlan(id, p, qty, house)
@@ -191,6 +192,16 @@ function A.PostPlan(id, p, qty, house)
   local plan = { lowest = lowest, price = math.max(1, (stray and ah or lowest) - 1), qty = qty, perDay = perDay,
     queue = (not stray and P.Queue(id, house)) or p.auctions or 0 }  -- ...nor its 5% band the queue
   plan.chance = perDay and 1 - math.exp(-perDay / (plan.queue + qty))
+  -- Measured on this AH when the feed has it (P.Fill): p24 is how often one unit
+  -- posted 1c under the lowest sold within 24h, undercuts included. For qty units,
+  -- the formula above with its rate solved from p24 at qty 1:
+  -- 1 - exp(-r / (queue + 1)) = p24 gives P = 1 - (1 - p24) ^ ((queue + 1) / (queue + qty)).
+  -- (At least 0.1%: a measured 0 would make relisting cost infinite.)
+  local fill = P.Fill(id, house)
+  if fill then
+    plan.chance = 1 - (1 - math.max(fill.p24, 0.001)) ^ ((plan.queue + 1) / (plan.queue + qty))
+    plan.fillDays = math.floor(fill.n / 24 + 0.5)  -- days of this AH behind it
+  end
   plan.deposit, plan.estimated = Deposit(id, vendor)
   -- Only the client's own deposit may make the AH lose to the vendor: the estimate
   -- is unverified (and neutral houses charge far more), so it only shows.

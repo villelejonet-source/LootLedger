@@ -226,7 +226,8 @@ function PostRows(rows, d)
   rows[#rows + 1] = { kind = "row", label = "Queue you would join", value = pl.queue .. " + your " .. pl.qty,
     note = "units within 5% of the lowest; " .. (pl.perDay and ("buyers take ~" .. math.floor(pl.perDay + 0.5) .. " a day") or "no sales data yet") }
   rows[#rows + 1] = { kind = "row", label = "24h auction",
-    note = "deposit " .. ns.Money(pl.deposit) .. (pl.estimated and " (estimate)" or "") .. ", lost each time it comes back unsold",
+    note = (pl.chance and (pl.fillDays and ("chance from " .. pl.fillDays .. " days of this AH; ") or "chance: estimate; ") or "")
+      .. "deposit " .. ns.Money(pl.deposit) .. (pl.estimated and " (estimate)" or "") .. ", lost each time it comes back unsold",
     value = (pl.chance and (math.floor(pl.chance * 100 + 0.5) .. "% sells, ") or "") .. "worth ~" .. ns.Money(d.unit or 0) .. T.Color(" each", C.muted) }
 end
 
