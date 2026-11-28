@@ -205,6 +205,26 @@ function Tr.Realized(id, now)
   return math.max(0, (wNet - wLost) / wN), count, units
 end
 
+-- Your AH results for an item over the last 30 days (Market tab), or nil without any:
+-- { sales, sold (units sold on the AH), back (units that came back unsold),
+--   unit (per unit sold, after the AH cut and deposits lost; nil without sales) }
+-- Vendor sales don't count.
+function Tr.Results(id, now)
+  local e = Tr.Item(id)
+  if not e then return nil end
+  local oldest = (now or time()) - Tr.SETTINGS.windowDays * DAY
+  local out, net, lost = { sales = 0, sold = 0, back = 0 }, 0, 0
+  for _, s in ipairs(e.sales) do
+    if s.t >= oldest and not s.vendor then out.sales, out.sold, net = out.sales + 1, out.sold + s.n, net + s.net end
+  end
+  for _, l in ipairs(e.lost) do
+    if l.t >= oldest then out.back, lost = out.back + l.n, lost + l.dep end
+  end
+  if out.sold + out.back == 0 then return nil end
+  out.unit = out.sold > 0 and math.max(0, (net - lost) / out.sold) or nil
+  return out
+end
+
 -- Share of AH income eaten by failed listings lately, across all items (0..0.5).
 -- Used to make prices from listings (not your own sales) a bit more realistic.
 -- It loops over every sale, and UnitValue asks for it per item valued: cached per

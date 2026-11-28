@@ -21,9 +21,10 @@ local function Feed() return type(LootLedgerPrices) == "table" and LootLedgerPri
 -- A feed is generated, but a broken or partial one must not break the addon.
 local function FeedHouses(feed) return feed and type(feed.houses) == "table" and feed.houses or {} end
 
-local function CurrentHouse()
+-- houseID: another house (nil = this character's)
+local function CurrentHouse(houseID)
   local feed = Feed()
-  local id = feed and P.House()
+  local id = feed and (houseID or P.House())
   return id and FeedHouses(feed)[id]
 end
 
@@ -31,14 +32,35 @@ end
 -- Purchases and trending (from the feed's sales / trending tables)
 ---------------------------------------------------------------------------
 -- { sold24, normal (nil if not known yet), auctions24 } or nil
-function P.Sales(itemID)
-  local h = CurrentHouse()
+function P.Sales(itemID, houseID)
+  local h = CurrentHouse(houseID)
   local s = h and h.sales and h.sales[itemID]
   if not s then return nil end
   local sold, normal, auctions = s:match("^(%d+),(%-?%d+),(%d+)$")
   if not sold then return nil end
   normal = tonumber(normal)
   return { sold24 = tonumber(sold), normal = normal >= 0 and normal or nil, auctions24 = tonumber(auctions) }
+end
+
+-- Units listed within 5% of the lowest price (the queue a new listing joins), or
+-- nil if the feed doesn't say (older feeds; items without history).
+function P.Queue(itemID, houseID)
+  local h = CurrentHouse(houseID)
+  local q = h and type(h.queue) == "table" and h.queue[itemID]
+  return type(q) == "number" and q or nil
+end
+
+-- How often one unit posted 1c under the lowest price sold within 24 hours on this
+-- house, measured by the feed (poller/fill.mjs): { p24 (0..1), n (start hours behind
+-- it) }, or nil (house not archived, not enough data yet, or malformed).
+function P.Fill(itemID, houseID)
+  local h = CurrentHouse(houseID)
+  local s = h and type(h.fill) == "table" and h.fill[itemID]
+  if type(s) ~= "string" then return nil end
+  local p24, n = s:match("^(%d+),(%d+)$")
+  p24, n = tonumber(p24), tonumber(n)
+  if not (p24 and p24 <= 1000 and n > 0) then return nil end
+  return { p24 = p24 / 1000, n = n }
 end
 
 P.TREND_LISTS = { "hot", "climbing", "drying", "cooling" }
@@ -145,6 +167,10 @@ local function FromFeed(itemID, c, houseID)
   c.updated = house.updated
   c.avg7 = tonumber(a7) > 0 and tonumber(a7) or nil
   c.historical = tonumber(a30) > 0 and tonumber(a30) or nil
+  -- The median of the last 3 hourly markets, where it differs (newer feeds): the
+  -- advice decides on it, as one hour's price is often noise.
+  local steady = type(house.steady) == "table" and house.steady[itemID]
+  c.steady = type(steady) == "number" and steady or nil
   return true
 end
 
@@ -372,7 +398,8 @@ end
 -- Everything known about an item's price. Fields can be nil.
 -- { vendor, market, min, recent, historical, avg7, auctions, soldPerDay,
 --   saleRate, region, hasAH = bool, source = "blizzard"|"tsm"|"scan"|nil,
---   updated = feed time, scanned = time of the scan the current numbers come from }
+--   updated = feed time, scanned = time of the scan the current numbers come from,
+--   steady = median market of the feed's last 3 hours, where it differs from market }
 -- houseID: read another house's prices (e.g. for an alt on the other faction).
 function P.Get(itemID, houseID)
   if not itemID then return { vendor = 0, hasAH = false } end
@@ -394,7 +421,7 @@ function P.Get(itemID, houseID)
     local market, min, qty = (scan.items[itemID] or ""):match("^(%d+),(%d+),(%d+)$")
     if market then
       c.market, c.recent, c.min, c.auctions = tonumber(market), tonumber(market), tonumber(min), tonumber(qty)
-      c.scanned = scan.t
+      c.scanned, c.steady = scan.t, nil
       c.source = c.source or "scan"
     end
   end

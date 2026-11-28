@@ -176,7 +176,8 @@ GetInboxHeaderInfo = function(i)
   if not m then return nil end
   local n = 0
   for _ in pairs(m.items or {}) do n = n + 1 end
-  return nil, nil, m.sender, m.subject, m.money or 0, 0, 30, n
+  -- ..., hasItem, wasRead, wasReturned, textCreated, canReply (a player's mail: set canReply = true)
+  return nil, nil, m.sender, m.subject, m.money or 0, 0, 30, n, false, false, false, m.canReply or false
 end
 GetInboxItem = function(i, a)
   local it = INBOX[i] and INBOX[i].items and INBOX[i].items[a]

@@ -128,6 +128,54 @@ test("security: hostile IDs and numbers from Saddlebag or Blizzard never reach P
   assert.match(lua, /\[2589\]="50,50,5,/);
 });
 
+test("security: history, snapshot and saved blocks read back from the history branch can't put code into Prices.lua", async (t) => {
+  const now = Date.now(), H = 3600e3, today = new Date(now).toISOString().slice(0, 10);
+  const evil = '" } } PWNED() x = { { "';
+  const history = {
+    days: { [evil]: { 2589: [1, 1, 1, 1] }, [today]: { 2589: [50, 1, 50, 20, Math.log(50), 1], [evil]: [1, 1, 1, 1] } },
+    months: { [`2026-10${evil}`]: { 2589: [10, 1] }, "2026-10": { 2589: ["1e3 PWNED()", 1] } },
+    hours: [3, 2].map((k) => ({ t: now - k * H, s: { 2589: [1, `1${evil}`, 100], [evil]: [1, 1, 1] }, q: { 2589: [20, "0x7F"] }, diff: true, h: 1 })),
+    sales: { [today]: { 2589: [`1${evil}`, 1, 1] } }, salesHours: { [evil]: 24 }, salesRules: 2,
+    index: [{ t: `1${evil}`, v: 1 }],
+  };
+  const snap = { t: now - H, l: [[1, `2589]=1 PWNED() --`, 5, 50, 2, 1], [2, 2589, `30${evil}`, 50, 2, 1], [3, 2589, 30, 50, 2, 1]] };
+  // House 114 fails this hour; its saved block closes the table and calls a function.
+  const block = `  [114] = { name = "A", faction = "Alliance", updated = ${Math.floor(now / 1000)}, listings = 5, days = 1, items = {} }, PWNED() x = { {`;
+  const lm = new Date(now).toUTCString();
+  const r = await runFeed(
+    { houses: HOUSES, data: { 113: { auctions: [listing(1, 2589, 20, 50)], lm, clm: lm }, 114: { status: 500 } } },
+    { "113.json.gz": history, "113.snap.json.gz": snap, "114.block.lua": block },
+  );
+  assert.equal(r.code, 0, r.out);
+  const lua = await r.lua();
+  assert.ok(!lua.includes("PWNED"), lua);
+  assert.match(lua, /\[113\] = \{ name = "Horde Thunderstrike"/);
+  assert.doesNotMatch(lua, /\[114\] = \{/);
+  assert.match(r.out, /house 114 .*not plain data, not used/);
+  const luaparse = await import("luaparse").then((m) => m.default, () => null);
+  if (luaparse) assert.deepEqual(luaparse.parse(lua, { luaVersion: "5.1" }).body.map((s) => s.type), ["AssignmentStatement"]);
+  else t.diagnostic("luaparse not installed: Prices.lua syntax not checked");
+});
+
+test("security: region and ruleset must be two letters and a whole number", async () => {
+  const spec = { houses: HOUSES.slice(0, 1), data: { 113: { auctions: [listing(1, 2589, 20, 50)] } } };
+  for (const env of [{ BNET_REGION: 'eu", PWNED() --' }, { AH_RULESET: "2 PWNED()" }]) {
+    const r = await runFeed(spec, {}, env);
+    assert.notEqual(r.code, 0, r.out);
+    assert.match(r.out, /must be/);
+  }
+});
+
+test("security: Saddlebag's sales per day are capped, and an oversized answer is not read", async () => {
+  const spec = { houses: HOUSES.slice(0, 1), data: { 113: { auctions: [listing(1, 2589, 20, 50)] } }, saddlebag: [{ itemID: 2600, salesPerDay: 1e300 }] };
+  const r = await runFeed(spec);
+  assert.equal(r.code, 0, r.out);
+  assert.match(await r.lua(), /\[2600\]=1000000,/);
+  const big = await runFeed({ ...spec, saddlebag: Array.from({ length: 1.2e6 }, (_, i) => ({ itemID: i + 1, salesPerDay: 1.5, pad: "x".repeat(10) })) });
+  assert.equal(big.code, 0, big.out);
+  assert.match(big.out, /Saddlebag sales per day unavailable: answer over 32 MB/);
+});
+
 test("A8: time of week: the hourly market index is kept, and each house gets its week profile", async () => {
   // 40 items with a price yesterday; today they list 10% higher.
   const yesterday = new Date(Date.now() - 86400e3).toISOString().slice(0, 10);
@@ -200,4 +248,82 @@ test("A12: the first run with new sales rules drops the old counts and says so",
   const h = await r.read("113.json.gz");
   assert.equal(h.salesRules, 2);
   assert.equal(h.sales[today], undefined);
+});
+
+test("F5: fill chances: a fill table only for commodities on archived houses with enough archive, other lines unchanged", async (t) => {
+  // 220 archived hours of Linen (a commodity) and a sword (not one), 1 of each bought every hour, ending an hour ago
+  const now = Date.now(), files = {};
+  for (let k = 220; k >= 1; k--) {
+    const t = now - k * 3600e3, f = `113.hours.${new Date(t).toISOString().slice(0, 10)}.json.gz`;
+    files[f] ??= { v: 1, fields: ["min", "market", "qty", "n", "q5", "q10", "q25", "sold", "gold", "span"], hours: [] };
+    files[f].hours.push({ t, r: 2, d: { 2589: [50, 50, 20, 1, 20, 20, 20, 1, 50, 1], 15000: [5000, 5000, 3, 3, 1, 2, 3, 1, 5000, 1] } });
+  }
+  const goods = { auctions: [listing(1, 15000, 1, 5000)], commodities: [{ id: 2, item: { id: 2589 }, quantity: 20, unit_price: 50, time_left: "LONG" }] };
+  const spec = { houses: HOUSES, data: { 113: goods, 114: goods } };
+  const r = await runFeed(spec, files, { ARCHIVE_HOUSES: "113" });
+  assert.equal(r.code, 0, r.out);
+  const lua = await r.lua();
+  // The feed workflow runs these tests before installing packages: check the Lua syntax where luaparse is there.
+  const luaparse = await import("luaparse").then((m) => m.default, () => null);
+  if (luaparse) luaparse.parse(lua, { luaVersion: "5.1" });
+  else t.diagnostic("luaparse not installed: Prices.lua syntax not checked");
+  const b113 = lua.slice(lua.indexOf("  [113] = "), lua.indexOf("  [114] = "));
+  const b114 = lua.slice(lua.indexOf("  [114] = "), lua.indexOf("\n  },\n  spd"));
+  // starts with a full 24 hours after them: the archived hours 24+ hours old
+  assert.match(b113, /\n    fill = \{\n\[2589\]="1000,197",\n    \},\n    trending = /);
+  assert.doesNotMatch(b114, /fill/);
+  const body = (b) => b.slice(b.indexOf("\n")).trimEnd(); // after the line with the house name
+  assert.equal(body(b113).replace(/\n    fill = \{\n.*\n    \},/, ""), body(b114), "same block otherwise");
+  assert.match(r.out, /house 113: fill chances for 2 items/, "the sword has numbers, but they aren't shipped");
+
+  // a corrupt archive day: no fill table, but the run goes on
+  const bad = await runFeed(spec, { ...files, [Object.keys(files)[0]]: "not gzip" }, { ARCHIVE_HOUSES: "113" });
+  assert.equal(bad.code, 0, bad.out);
+  assert.doesNotMatch(await bad.lua(), /fill = /);
+  assert.match(bad.out, /house 113: fill chances skipped/);
+});
+
+test("A13: queue depth ships as a new table for items with history; existing line formats are unchanged", async () => {
+  // Linen: 35 listed at 50/52/62 (25 within 5% of the lowest), enough listed for history.
+  // Light Leather: 2 listed, no history, so no queue line either.
+  const auctions = [listing(1, 2589, 20, 50), listing(2, 2589, 5, 52), listing(3, 2589, 10, 62), listing(4, 2318, 2, 300)];
+  // An hour ago 30 Linen were in listing 1: 10 were bought since, so there is a sales line.
+  const now = Date.now();
+  const prevSnap = { t: now - 3600e3, l: [[1, 2589, 30, 50, 2, 1], [2, 2589, 5, 52, 2, 1], [3, 2589, 10, 62, 2, 1], [4, 2318, 2, 300, 2, 0]] };
+  const lm = new Date(now).toUTCString();
+  const r = await runFeed({ houses: HOUSES.slice(0, 1), data: { 113: { auctions, lm, clm: lm } } }, { "113.snap.json.gz": prevSnap });
+  assert.equal(r.code, 0, r.out);
+  const lua = await r.lua();
+  const queue = lua.match(/\n    queue = \{\n([^}]*)\n    \},\n/);
+  assert.ok(queue, lua.slice(0, 1500));
+  assert.deepEqual(queue[1].split("\n"), ["[2589]=25,"]);
+  // What older addon versions parse with strict patterns: items "market,min,qty,avg7,avg30", sales "sold24,normal,auctions24".
+  const block = (name) => lua.match(new RegExp(`\n    ${name} = \{\n([^}]*)\n    \},`))[1].split("\n");
+  assert.deepEqual(block("items").sort(), ['[2318]="300,300,2,300,300",', '[2589]="50,50,35,50,50",']);
+  const salesLines = block("sales");
+  assert.ok(salesLines.length > 0);
+  for (const l of salesLines) assert.match(l, /^\[\d+\]="\d+,-?\d+,\d+",$/);
+});
+
+test("A14: the median of the last 3 hours ships as `steady` for items with history, where it is 3%+ off", async () => {
+  const now = Date.now(), H = 3600e3;
+  // Linen at 50 now, 70 and 60 the hours before (median 60); Wool at 100 now, 102 and 99 (median 100);
+  // Light Leather (2 listed, no history) at 300 now, 400 and 350 before.
+  const auctions = [listing(1, 2589, 20, 50), listing(2, 2592, 20, 100), listing(3, 2318, 2, 300)];
+  const q = (l, w, ll) => ({ 2589: [20, l], 2592: [20, w], 2318: [2, ll] });
+  const hours = [{ t: now - 2 * H, s: {}, q: q(70, 102, 400), diff: false }, { t: now - H, s: {}, q: q(60, 99, 350), diff: false }];
+  const lm = new Date(now).toUTCString();
+  const r = await runFeed({ houses: HOUSES.slice(0, 1), data: { 113: { auctions, lm, clm: lm } } },
+    { "113.json.gz": { days: {}, months: {}, hours, sales: {}, salesHours: {}, salesRules: 2 } });
+  assert.equal(r.code, 0, r.out);
+  assert.match(await r.lua(), /\n    steady = \{\n\[2589\]=60,\n    \},\n/, "Wool within 3%, Light Leather without history: not shipped");
+});
+
+test("a damaged hourly archive file never fails the run", async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const r = await runFeed({ houses: HOUSES.slice(0, 1), data: { 113: { auctions: [listing(1, 2589, 20, 50)] } } },
+    { [`113.hours.${today}.json.gz`]: { v: 1, fields: [], hours: "not a list" } }, { ARCHIVE_HOUSES: "113" });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /house 113: hourly archive skipped/);
+  assert.match(await r.lua(), /\[113\] = \{/);
 });

@@ -130,6 +130,19 @@ function I.RealmChars()
   return list
 end
 
+-- How many of an item the characters on this AH own, and who: total, { "Vanish 12", ... }
+function I.Total(id)
+  local total, parts = 0, {}
+  for _, ch in ipairs(I.RealmChars()) do
+    local n = I.Count(ch, id)
+    if n > 0 then
+      total = total + n
+      parts[#parts + 1] = ch.name .. " " .. n
+    end
+  end
+  return total, parts
+end
+
 -- Every item owned on this realm: { [id] = { total, chars = { [name] = n } } }
 function I.AllItems()
   local all = {}

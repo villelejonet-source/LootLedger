@@ -22,21 +22,25 @@ on:
         default: false
 
 permissions:
-  contents: write
-  actions: write   # lets a run start the next one, and keep the schedule switched on
+  contents: read   # raised for the prices job only, below
 
 concurrency:
   group: prices
   cancel-in-progress: false
 
 jobs:
-  prices:
+  # Every release ships the addon from main too: test it (and its Lua syntax) first,
+  # so a broken commit can't reach players through the hourly release. A job of its
+  # own, with a read-only token and no secrets: `npm ci` runs code from npm packages,
+  # which must never run where the write token and the API keys are.
+  # It also decides whether this run has anything to do (scheduled runs only).
+  tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 120   # the work takes ~5 minutes; the rest is waiting for the next hour
-    # The write token (git push, releases, starting runs) goes only to the steps that
-    # need it, not to the ones running the feed or its tests.
-    env:
-      KEEP_RELEASES: 48
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      skip: ${{ steps.fresh.outputs.skip }}
     steps:
       - name: Skip if a fresh release exists
         id: fresh
@@ -56,18 +60,12 @@ jobs:
       - uses: actions/checkout@v4
         if: steps.fresh.outputs.skip != 'true'
         with:
-          persist-credentials: false   # no write token left in .git/config for the feed's own steps
+          persist-credentials: false
       - uses: actions/setup-node@v4
         if: steps.fresh.outputs.skip != 'true'
         with:
           node-version: 24
 
-      - name: Tests
-        if: steps.fresh.outputs.skip != 'true'
-        run: node --test poller/*.test.mjs
-
-      # Every release ships the addon from main too: test it (and its Lua syntax) first,
-      # so a broken commit can't reach players through the hourly release.
       - name: Addon tests
         if: steps.fresh.outputs.skip != 'true'
         run: |
@@ -79,8 +77,39 @@ jobs:
             for (const f of toc) luaparse.parse(fs.readFileSync(path.join("addon/LootLedger", ...f.split("\\")), "utf8"), { luaVersion: "5.1" });
             console.log("Lua syntax ok:", toc.length, "files");'
 
+  prices:
+    needs: tests
+    # Runs even when the tests failed or were cancelled: its last step starts the next
+    # run, and the hourly chain must never break. The feed, history and release steps
+    # only run when the tests passed and there is something to do (FEED).
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 120   # the work takes ~5 minutes; the rest is waiting for the next hour
+    permissions:
+      contents: write
+      actions: write   # lets a run start the next one, and keep the schedule switched on
+    # The write token (git push, releases, starting runs) goes only to the steps that
+    # need it, not to the ones running the feed or its tests.
+    env:
+      KEEP_RELEASES: 48
+      FEED: ${{ needs.tests.result == 'success' && needs.tests.outputs.skip != 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.FEED == 'true'
+        with:
+          persist-credentials: false   # no write token left in .git/config for the feed's own steps
+      - uses: actions/setup-node@v4
+        if: env.FEED == 'true'
+        with:
+          node-version: 24
+
+      # The feed's own tests need no packages (no npm here: see the tests job).
+      - name: Tests
+        if: env.FEED == 'true'
+        run: node --test poller/*.test.mjs
+
       - name: Get previous history
-        if: steps.fresh.outputs.skip != 'true'
+        if: env.FEED == 'true'
         env:
           REPO_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
         # No history branch yet (ls-remote exit 2): start empty. Any other failure stops
@@ -103,7 +132,7 @@ jobs:
           fi
 
       - name: Fetch auction houses
-        if: steps.fresh.outputs.skip != 'true'
+        if: env.FEED == 'true'
         run: node poller/ah.mjs
         env:
           BNET_CLIENT_ID: ${{ secrets.BNET_CLIENT_ID }}
@@ -115,7 +144,7 @@ jobs:
 
       # History lives on its own branch, replaced every run (one commit, so the repo doesn't grow).
       - name: Keep history
-        if: steps.fresh.outputs.skip != 'true'
+        if: env.FEED == 'true'
         env:
           REPO_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
         run: |
@@ -127,7 +156,7 @@ jobs:
           git push --quiet --force "$REPO_URL" history
 
       - name: Build zip
-        if: steps.fresh.outputs.skip != 'true'
+        if: env.FEED == 'true'
         id: build
         run: |
           version=$(sed -n 's/^## Version: *//p' addon/LootLedger/LootLedger.toc | tr -d '\r')
@@ -139,12 +168,17 @@ jobs:
           echo "title=Cutpurse Ledger $version · prices $(date -u '+%Y-%m-%d %H:%M') UTC" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
-        if: steps.fresh.outputs.skip != 'true'
+        if: env.FEED == 'true'
+        # Tag and title come in as variables, not pasted into the script: the version
+        # in them is read from a file. The tag must look like v3.15.0-202611281235.
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.build.outputs.tag }}
+          TITLE: ${{ steps.build.outputs.title }}
         run: |
-          gh release create "${{ steps.build.outputs.tag }}" dist/CutpurseLedger-*.zip \
-            --title "${{ steps.build.outputs.title }}" \
+          if ! [[ "$TAG" =~ ^v[0-9.]+-[0-9]{12}$ ]]; then echo "::error::Unexpected release tag: $TAG"; exit 1; fi
+          gh release create "$TAG" dist/CutpurseLedger-*.zip \
+            --title "$TITLE" \
             --notes "Cutpurse Ledger with auction house prices from $(date -u '+%Y-%m-%d %H:%M') UTC. Install or update both folders (LootLedger and LootLedger_Prices) into Interface/AddOns of your _forever_ folder." \
             --latest
 
@@ -153,7 +187,7 @@ jobs:
       # A CurseForge failure must not stop the steps after it.
       - name: Upload prices to CurseForge
         continue-on-error: true
-        if: steps.fresh.outputs.skip != 'true'
+        if: env.FEED == 'true'
         env:
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
           FORCE: ${{ inputs.curseforge }}
@@ -167,7 +201,7 @@ jobs:
             --name "Prices $stamp UTC" --changelog "Auction house prices for every EU WoW: Forever auction house, $stamp UTC."
 
       - name: Prune old releases
-        if: steps.fresh.outputs.skip != 'true'
+        if: env.FEED == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

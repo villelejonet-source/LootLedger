@@ -33,7 +33,7 @@ test("prices: the write token goes only to the steps that use git or gh", () => 
   assert.equal(job.env.REPO_URL, undefined);
   const withToken = job.steps.filter((s) => s.env && (s.env.GH_TOKEN || s.env.REPO_URL)).map((s) => s.name);
   assert.deepEqual(withToken, [
-    "Skip if a fresh release exists", "Get previous history", "Keep history", "Publish release",
+    "Get previous history", "Keep history", "Publish release",
     "Prune old releases", "Keep schedule alive", "Start the next run",
   ]);
   for (const name of ["Tests", "Fetch auction houses", "Upload prices to CurseForge"]) {
@@ -50,11 +50,38 @@ test("prices: no write token left on disk for the feed's steps", () => {
   assert.match(hist.run, /git -C history remote set-url origin "https:\/\/github\.com\//, "the history clone must drop the token from its remote");
 });
 
-test("prices: the addon it ships is tested (tests and Lua syntax) before the zip is built", () => {
-  const names = load("prices.yml").jobs.prices.steps.map((s) => s.name);
-  const at = (n) => names.indexOf(n);
-  assert.ok(at("Addon tests") >= 0 && at("Addon tests") < at("Build zip"));
-  const run = load("prices.yml").jobs.prices.steps[at("Addon tests")].run;
+test("prices: the addon it ships is tested (tests and Lua syntax) in a job before the prices job", () => {
+  const { jobs } = load("prices.yml");
+  assert.equal(jobs.prices.needs, "tests");
+  const run = jobs.tests.steps.find((s) => s.name === "Addon tests").run;
+  assert.match(run, /npm ci/);
   assert.match(run, /node --test tests\/\*\.test\.mjs/);
   assert.match(run, /luaparse/);
+});
+
+test("prices: npm packages only run in the tests job, with a read-only token and no secrets", () => {
+  const wf = load("prices.yml");
+  assert.deepEqual(wf.permissions, { contents: "read" }, "workflow default");
+  assert.deepEqual(wf.jobs.tests.permissions, { contents: "read" });
+  assert.doesNotMatch(JSON.stringify(wf.jobs.tests), /secrets\./);
+  assert.deepEqual(wf.jobs.prices.permissions, { contents: "write", actions: "write" });
+  for (const s of wf.jobs.prices.steps) assert.doesNotMatch(s.run ?? "", /\bnpm\b|node_modules/, `${s.name} must not use npm`);
+});
+
+test("prices: the chain goes on whatever happens to the tests; the work waits for them to pass", () => {
+  const job = load("prices.yml").jobs.prices;
+  assert.equal(job.if, "always()", "the prices job runs even if the tests failed");
+  assert.match(job.env.FEED, /needs\.tests\.result == 'success'/);
+  assert.match(job.env.FEED, /needs\.tests\.outputs\.skip != 'true'/);
+  const last = job.steps.at(-1);
+  assert.equal(last.name, "Start the next run");
+  assert.equal(last.if, "always()");
+  for (const s of job.steps.slice(0, -1)) {
+    if (s.name === "Keep schedule alive") continue; // gh only, no feed or release
+    assert.equal(s.if, "env.FEED == 'true'", `${s.name ?? s.uses} waits for the tests`);
+  }
+  // The fresh-release check now lives in the tests job, which skips its work too.
+  const tests = load("prices.yml").jobs.tests;
+  assert.equal(tests.outputs.skip, "${{ steps.fresh.outputs.skip }}");
+  for (const s of tests.steps.slice(1)) assert.equal(s.if, "steps.fresh.outputs.skip != 'true'");
 });

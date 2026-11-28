@@ -62,18 +62,19 @@ local function Check(e)
   local id = tonumber(e.link:match("item:(%d+)"))
   if not (id and A.IsAHItem(id)) then return end
   local p = ns.Prices.Get(id)
-  local ah = ns.Prices.AHPrice(p)
   local qtyText = e.qty > 1 and (" x" .. e.qty) or ""
-  if not ah then
+  if not p.hasAH then
     ns.Print("|cffff9933Heads up:|r you vendored " .. e.link .. qtyText ..
       ". It's white or better and there is no AH price for it yet, so check the AH next time.")
     return
   end
-  local ahNet = math.floor(ah * (1 - A.SETTINGS.ahCut)) * e.qty
+  -- The advice's own value (relisting costs counted; the vendor price when it said Vendor),
+  -- for the stack you had before this sale: following the advice never sets this off.
+  local ahNet = A.Decide(id, e.qty + ns.Inventory.Total(id)).unit * e.qty
   local vendor = e.price > 0 and e.price or (p.vendor or 0) * e.qty
   if ahNet <= vendor * 1.1 then return end  -- vendor was as good (or close enough)
 
-  local msg = ("You sold %s%s to a vendor for %s.\n\nOn the AH you'd get about %s\n(after the 5%% cut).\n\nBuy it back?")
+  local msg = ("You sold %s%s to a vendor for %s.\n\nOn the AH you'd get about %s\n(after the 5%% cut and relisting).\n\nBuy it back?")
     :format(e.link, qtyText, ns.Money(vendor), ns.Money(ahNet))
   ns.Print("|cffff6b6bSold below AH value:|r " .. e.link .. qtyText .. " for " .. ns.Money(vendor)
     .. ", AH ~" .. ns.Money(ahNet))

@@ -61,7 +61,7 @@ local function LastChange(values)
   return last and prev and (last / prev - 1) or nil
 end
 
-local SupplyRows, TimeOfWeekRows  -- defined below Render
+local SupplyRows, TimeOfWeekRows, PostRows, ResultRows  -- defined below Render
 
 local function Empty()
   local rows = {
@@ -129,12 +129,18 @@ local function Render(view)
     rows[#rows + 1] = { kind = "note", text = "AH price from your scan " .. ns.Ago(time() - p.scanned)
       .. " (" .. (p.auctions or 0) .. " listed). The chart and averages come from the hourly feed." }
   end
+  if ah and d.ah and d.ah ~= ah then
+    rows[#rows + 1] = { kind = "note", text = "The advice goes by " .. ns.Money(d.ah)
+      .. ", the middle of the last 3 hourly prices: one hour's price is often noise." }
+  end
   ScanRows(rows, id)
 
   local badgeColors = { SELL = C.green, LIST = C.gold, HOLD = C.blue, CRASH = C.red, CHECK = { 1, 0.6, 0.2, 1 },
     VENDOR = { 0.75, 0.75, 0.75, 1 }, KEEP = C.muted }
   rows[#rows + 1] = { kind = "row", badge = { text = ns.Advisor.ACTIONS[d.action].label, color = badgeColors[d.action] },
     label = d.reason, value = d.unit and d.unit > 0 and (ns.Money(d.unit) .. T.Color(" each", C.muted)) or "" }
+  PostRows(rows, d)
+  ResultRows(rows, id)
 
   if not h then
     rows[#rows + 1] = { kind = "note", text = p.hasAH
@@ -208,6 +214,39 @@ local function Render(view)
 
   TimeOfWeekRows(rows)
   return SupplyRows(rows, id, p, h)
+end
+
+-- Posting it: the suggested price, the floor, the queue you would join, and the
+-- chance to sell in a 24h auction with its deposit and what a unit is worth
+-- relisted until it sells (Advisor.PostPlan).
+function PostRows(rows, d)
+  local pl = d.plan
+  if not pl then return end
+  rows[#rows + 1] = { kind = "section", text = "Posting", right = T.Color("you post it yourself", C.muted) }
+  rows[#rows + 1] = { kind = "row", label = "Suggested price", value = d.post and ns.Money(d.post) or T.Color("not now", C.muted),
+    note = pl.price + 1 == pl.lowest and ("1c under the lowest listing, " .. ns.Money(pl.lowest))
+      or ("1c under the AH price: the lowest, " .. ns.Money(pl.lowest) .. ", looks like a stray") }
+  rows[#rows + 1] = { kind = "row", label = "Floor", value = ns.Money(pl.vendorFloor),
+    note = "the least that beats vendoring, after the cut and relisting" }
+  rows[#rows + 1] = { kind = "row", label = "Queue you would join", value = pl.queue .. " + your " .. pl.qty,
+    note = "units within 5% of the lowest; " .. (pl.perDay and ("buyers take ~" .. math.floor(pl.perDay + 0.5) .. " a day") or "no sales data yet") }
+  rows[#rows + 1] = { kind = "row", label = "24h auction",
+    note = (pl.chance and (pl.fillDays and ("chance from " .. pl.fillDays .. " days of this AH; ") or "chance: estimate; ") or "")
+      .. "deposit " .. ns.Money(pl.deposit) .. (pl.estimated and " (estimate)" or "") .. ", lost each time it comes back unsold",
+    value = (pl.chance and (math.floor(pl.chance * 100 + 0.5) .. "% sells, ") or "") .. "worth ~" .. ns.Money(d.unit or 0) .. T.Color(" each", C.muted) }
+end
+
+-- Your AH results with it (Trade.Results): only what has data.
+function ResultRows(rows, id)
+  local r = ns.Trade.Results(id)
+  if not r then return end
+  rows[#rows + 1] = { kind = "section", text = "Your results", right = T.Color("last 30 days, this AH", C.muted) }
+  if r.unit then
+    rows[#rows + 1] = { kind = "row", label = "You got", value = ns.Money(r.unit) .. T.Color(" each", C.muted),
+      note = "after the AH cut and lost deposits, " .. r.sales .. (r.sales == 1 and " sale" or " sales") }
+  end
+  rows[#rows + 1] = { kind = "row", label = "Sold before it expired", value = math.floor(r.sold / (r.sold + r.back) * 100 + 0.5) .. "%",
+    note = r.sold .. " sold, " .. r.back .. " came back unsold" }
 end
 
 -- The whole auction house by hour of the week: when do items list highest and lowest?

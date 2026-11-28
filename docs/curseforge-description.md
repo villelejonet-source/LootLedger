@@ -8,6 +8,8 @@
 - **Net worth:** gold on all your characters plus what their bags, bank and mail would sell for right now. Each character is priced at its own auction house. Type `/cl worth` or check the Home tab.
 - **What to sell:** everything you own on all characters, marked **Sell now**, **List**, **Hold** or **Vendor**, with the reason. It tells a dip (wait) from a crash where buyers have gone (sell).
 - **Gathering:** pickpocketing, skinning, mining, herbalism and fishing: how much, what dropped, gold per hour, and what it's worth at the price *you* actually sell for once you have sales.
+- **Advice that tells you the price:** each item says Sell now, List, Hold or Vendor, what to post at, and how likely it is to sell in a day. Holds come with a target and a deadline. It never posts or cancels anything for you.
+- **Track record:** your active auctions and their chances, what you really got per item, and how often the advice was right.
 - **Market view:** Alt+click any item for its price chart (30 days, 12 weeks, 12 months), its trend, and its weekly pattern, for example *cheapest on Tuesday, most expensive on Saturday*. The advice follows it: hold on Tuesday, sell on Saturday.
 - **Time of week:** when the whole auction house lists highest and lowest, hour by hour (for example *Friday 18:00-21:00*), and when to list items that have no pattern of their own.
 - **Trending:** what's selling fast, getting pricier, drying up or cooling off on your auction house, based on what was really bought hour by hour. Needs a few days of data on a new house.

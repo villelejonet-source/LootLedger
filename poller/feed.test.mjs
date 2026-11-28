@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { carryOverHistory, readGzJson, fetchRetry, diffPlausible, snapshotTime, luaEscape } from "./feed.mjs";
+import { carryOverHistory, readGzJson, fetchRetry, diffPlausible, snapshotTime, luaEscape, isHouseBlock } from "./feed.mjs";
 
 const tmp = () => mkdtemp(join(tmpdir(), "feed-"));
 
@@ -65,4 +65,44 @@ test("A7: snapshot plausibility, time and Lua escaping", () => {
   assert.equal(snapshotTime(null, "Mon, 23 Nov 2026 11:00:00 GMT"), Date.parse("2026-11-23T11:00:00Z"));
   assert.equal(luaEscape('a"b\\c'), 'a\\"b\\\\c');
   assert.equal(luaEscape("a\nb"), "a\\nb");
+});
+
+test("security: a saved house block is reused only if it is plain data", () => {
+  const ok = [
+    `  [114] = { name = "${luaEscape('A "B" \\ ]] \n x')}", faction = "Alliance", updated = 1795879205, listings = 5, days = 1,\n` +
+      `    items = {\n[2589]="77,77,5,0,0",\n    } },`,
+    `  [114] = { name = "A", updated = 1, items = {}, steady = {\n[2589]=60,\n    },\n` +
+      `    trending = { ready = false, hoursOfData = 12.5, baselineDays = 0, readyAt = 1795879205,\n` +
+      `      hot = { "1,2,3", "4,5" }, cooling = {  } } },\n`,
+  ];
+  for (const b of ok) assert.equal(isHouseBlock(b, 114), true, b);
+  const bad = [
+    '  [113] = { name = "A" },',                                   // another house
+    '  [114] = { name = "A" }',                                    // no comma at the end
+    '  [114] = { name = "A" }, x = 1',                             // something after it
+    '  [114] = { name = "A" } }, PWNED() x = { {',                 // closes the table and runs code
+    '  [114] = { name = PWNED"x" },',                              // a call with a string
+    '  [114] = { name = PWNED{} },',                               // a call with a table
+    '  [114] = { name = NaN },',                                   // a name as a value
+    '  [114] = { name = "a" .. "b" },',                            // an operator
+    '  [114] = { n = 1 -2 },',
+    '  [114] = { name = "A" }, -- comment',
+    '  [114] = { name = [[long]] },',
+    '  [114] = { ["x"] = 1 },',
+    '  [114] = { end = 1 },',                                      // a keyword as a key: a syntax error
+    '  [114] = { name = "a\nb" },',                               // a line break inside a string
+    '  [114] = { name = "a\\x" },',                               // an escape luaEscape never writes
+    '  [114] = { name = "A" ,',                                    // not closed
+    '  [114] = ' + "{ a = ".repeat(20) + "1" + " }".repeat(20) + ",", // nested too deep
+  ];
+  for (const b of bad) assert.equal(isHouseBlock(b, 114), false, b);
+});
+
+test("isHouseBlock rejects whitespace Lua 5.1 doesn't accept (no-break space, BOM)", async () => {
+  const { isHouseBlock } = await import("./feed.mjs");
+  const ok = `  [114] = { name = "A", faction = "Horde", updated = 1, listings = 5, days = 1, items = {\n[2589]="1,1,1,1,1",\n    } },`;
+  assert.equal(isHouseBlock(ok, 114), true);
+  assert.equal(isHouseBlock(ok.replace("= {", "=\u00a0{"), 114), false);
+  assert.equal(isHouseBlock("\ufeff" + ok, 114), false);
+  assert.equal(isHouseBlock(ok + "\u00a0", 114), false);
 });

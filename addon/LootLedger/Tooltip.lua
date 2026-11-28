@@ -10,22 +10,19 @@ end
 
 local function AddLines(tooltip, id, needsShow)
   if not (ns.db and id) then return end
-  local d = ns.Advisor.Decide(id)
+  local total, parts = ns.Inventory.Total(id)
+  local d = ns.Advisor.Decide(id, total)
   tooltip:AddDoubleLine("Cutpurse Ledger: " .. ns.Advisor.Tag(d.action), d.reason, 1, 0.82, 0, 1, 1, 1)
 
   -- Prices
   local p = ns.Prices.Get(id)
   if p.hasAH then
-    local ah = ns.Prices.AHPrice(p)
-    Row(tooltip, "AH price", ns.Money(ah) .. Grey(" each"))
-    if p.min and p.min < ah then
-      Row(tooltip, "Lowest listed", ns.Money(p.min) .. (p.auctions and Grey("  (" .. p.auctions .. " listed)") or ""))
-    elseif p.auctions then
-      Row(tooltip, "Listed", tostring(p.auctions))
-    end
+    local ah = d.ah or ns.Prices.AHPrice(p)  -- the price the advice went by (the last 3 hours' median)
+    Row(tooltip, "AH price", ns.Money(ah) .. Grey(" each" .. (p.auctions and ("  (" .. p.auctions .. " listed)") or "")))
     local h = ns.Prices.History(id)
     local status = ns.Prices.Status()
     if h and h.baseline then
+      -- The same % the advice line uses (against what is normal for today when there is a weekly pattern)
       local vs = d.vs and string.format("  (%+d%%)", math.floor(d.vs * 100 + 0.5)) or ""
       Row(tooltip, "Normal price", ns.Money(h.baseline) .. Grey(vs .. "  last few days"))
     elseif status.source == "blizzard" then
@@ -60,23 +57,10 @@ local function AddLines(tooltip, id, needsShow)
     Row(tooltip, "Quest item", q.name .. Grey(" (" .. q.level .. ")" .. (#quests > 1 and (" +" .. (#quests - 1) .. " more") or "")))
   end
 
-  -- What you own, and what it would bring in
-  local total, parts = 0, {}
-  for _, ch in ipairs(ns.Inventory.RealmChars()) do
-    local n = ns.Inventory.Count(ch, id)
-    if n > 0 then
-      total = total + n
-      parts[#parts + 1] = ch.name .. " " .. n
-    end
-  end
+  -- What you own, and what it would bring in following the advice
   if total > 0 then
-    if p.hasAH and ns.Advisor.IsAHItem(id) then
-      local net = math.floor(ns.Prices.AHPrice(p) * (1 - ns.Advisor.SETTINGS.ahCut)) * total
-      local vendor = (p.vendor or 0) * total
-      Row(tooltip, "Your " .. total .. " on the AH", ns.Money(net)
-        .. (vendor > 0 and Grey("  (vendor ") .. ns.Money(vendor) .. Grey(")") or ""))
-    end
-    tooltip:AddLine("  You own " .. total .. "  (" .. table.concat(parts, ", ") .. ")", 0.6, 0.6, 0.6)
+    tooltip:AddLine("  You own " .. total .. "  (" .. table.concat(parts, ", ") .. ")"
+      .. ((d.unit or 0) > 0 and (", worth ~" .. ns.Money(d.unit * total)) or ""), 0.6, 0.6, 0.6)
   end
   if p.hasAH then tooltip:AddLine("  Alt+click: price history", 0.45, 0.45, 0.45) end
   if needsShow then tooltip:Show() end  -- older clients need a resize
