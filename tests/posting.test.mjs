@@ -96,6 +96,7 @@ test("a stray cheap lowest listing (under 90% of the AH price) doesn't set the p
   const stray = decide({ market: 1000, min: 800, sales: "200,240,50", queue: 29 }).d;
   assert.equal(stray("action"), "LIST", "not held: there is no 85%-of-normal floor");
   assert.equal(stray("post"), 999, "1c under the AH price");
+  assert.equal(stray("plan.queue"), 300, "queue: everything listed, not the 5% band around the stray");
   assert.equal(decide({ market: 1000, min: 950, sales: "200,240,50", queue: 29 }).d("post"), 949, "a near lowest is undercut");
 });
 
@@ -118,13 +119,26 @@ test("relisting: an item the AH pays 5x the vendor for, with a 25% chance a day,
   assert.ok(d("unit") > 700);
 });
 
+// The client's own deposit for a 24h auction: 1s50c.
+const CLIENT_DEPOSIT = "C_AuctionHouse.CalculateCommodityDeposit = function() return 150 end";
+const SLOW = { market: 700, vendor: 500, sales: "2,2,2", queue: 200 };
+
 test("vendor better after relist costs: a slow seller behind a long queue is vendored", () => {
   // 7s on the AH, 5s at the vendor; 2 sold a day behind 200 others: ~100 relists at 1s50c deposit each.
-  const slow = decide({ market: 700, vendor: 500, sales: "2,2,2", queue: 200 }).d;
+  const slow = decide({ ...SLOW, before: CLIENT_DEPOSIT }).d;
   assert.equal(slow("action"), "VENDOR");
   assert.equal(slow("unit"), 500);
-  assert.notEqual(decide({ market: 700, vendor: 500, sales: "200,240,50", queue: 20 }).d("action"), "VENDOR");
+  assert.notEqual(decide({ market: 700, vendor: 500, sales: "200,240,50", queue: 20, before: CLIENT_DEPOSIT }).d("action"), "VENDOR");
   assert.notEqual(decide({ market: 700, vendor: 500 }).d("action"), "VENDOR", "no sales data: 6s65 after the cut beats 5s");
+});
+
+test("an estimated deposit never makes it Vendor or 'not worth posting': the AH after the cut is compared, as before", () => {
+  const slow = decide(SLOW).d;  // no client deposit: 30% of 5s estimated
+  assert.equal(slow("plan.estimated"), true);
+  assert.notEqual(slow("action"), "VENDOR");
+  assert.notEqual(slow("action"), "HOLD");
+  assert.equal(decide(SLOW).get("D.plan.vendorFloor"), Math.ceil(500 / 0.95));
+  assert.equal(decide({ market: 500, vendor: 500, sales: "2,2,2", queue: 200 }).d("action"), "VENDOR", "4s75 after the cut is still under 5s");
 });
 
 test("one value: the same unit for HOLD and LIST, and in the Sell tab and net worth", () => {
@@ -165,7 +179,7 @@ const MERCHANT = `
   StaticPopup_Show = function() POPUPS = POPUPS + 1 end
 `;
 function sellToVendor(opts, qty) {
-  const { run, get } = vm({ ...opts, before: MERCHANT, files: [...FILES, "VendorGuard.lua"] });
+  const { run, get } = vm({ ...opts, before: MERCHANT + (opts.before ?? ""), files: [...FILES, "VendorGuard.lua"] });
   run(`FIRE("MERCHANT_SHOW")`);
   run(`BUYBACK[1] = { id = ${ID}, qty = ${qty}, price = ${qty} * ITEMS[${ID}].sell }; FIRE("MERCHANT_UPDATE")`);
   return { popups: get("POPUPS"), action: get(`ns.Advisor.Decide(${ID}, ${qty}).action`) };
@@ -173,7 +187,7 @@ function sellToVendor(opts, qty) {
 
 test("vendor guard agrees with the advice: vendoring a Vendor item is quiet, a List item still warns", () => {
   // Old rule: 7s x 0.95 = 6s65 > 5s x 1.1, so this popped up although the advice said Vendor.
-  const vendored = sellToVendor({ market: 700, vendor: 500, sales: "2,2,2", queue: 200 }, 5);
+  const vendored = sellToVendor({ ...SLOW, before: CLIENT_DEPOSIT }, 5);
   assert.equal(vendored.action, "VENDOR");
   assert.equal(vendored.popups, 0);
   const listed = sellToVendor({ sales: "200,240,50", queue: 29 }, 5);

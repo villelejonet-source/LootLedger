@@ -164,8 +164,10 @@ end
 -- vendor price per 12 hours, rounded up.
 local function Deposit(id, vendor)
   local api = C_AuctionHouse and C_AuctionHouse.CalculateCommodityDeposit
-  local ok, dep = pcall(api or error, id, 2, 1)  -- 2 = the client's code for 24h
-  if ok and type(dep) == "number" and dep > 0 then return dep, false end
+  if api then
+    local ok, dep = pcall(api, id, 2, 1)  -- 2 = the client's code for 24h
+    if ok and type(dep) == "number" and dep > 0 then return dep, false end
+  end
   return math.ceil(vendor * A.SETTINGS.depositPer12h * 2), true
 end
 
@@ -185,12 +187,14 @@ function A.PostPlan(id, p, qty, house)
   local perDay = s and (s.normal or s.sold24)
   if perDay == 0 then perDay = nil end
   local lowest = p.min or ah
-  local anchor = lowest >= 0.9 * ah and lowest or ah  -- a stray cheap listing doesn't set the price
-  local plan = { lowest = lowest, price = math.max(1, anchor - 1), queue = P.Queue(id, house) or p.auctions or 0,
-    qty = qty, perDay = perDay }
+  local stray = lowest < 0.9 * ah  -- a stray cheap listing doesn't set the price...
+  local plan = { lowest = lowest, price = math.max(1, (stray and ah or lowest) - 1), qty = qty, perDay = perDay,
+    queue = (not stray and P.Queue(id, house)) or p.auctions or 0 }  -- ...nor its 5% band the queue
   plan.chance = perDay and 1 - math.exp(-perDay / (plan.queue + qty))
   plan.deposit, plan.estimated = Deposit(id, vendor)
-  local relists = plan.chance and (1 - plan.chance) / plan.chance or 0
+  -- Only the client's own deposit may make the AH lose to the vendor: the estimate
+  -- is unverified (and neutral houses charge far more), so it only shows.
+  local relists = plan.chance and not plan.estimated and (1 - plan.chance) / plan.chance or 0
   plan.vendorFloor = math.ceil((vendor + plan.deposit * relists) / (1 - A.SETTINGS.ahCut))
   return plan
 end
@@ -227,8 +231,9 @@ function A.Decide(id, qty)
   local plan = A.PostPlan(id, p, math.max(1, qty or ns.Inventory.Total(id)))
   local d = { ah = ah, normal = normal, plan = plan, unit = Worth(plan, vendor) }
 
-  -- Worth less on the AH than at the vendor, after the cut and the deposits lost relisting.
-  if Value(ah, plan) < vendor then
+  -- Worth less on the AH than at the vendor, after the cut and the deposits lost
+  -- relisting (only when the client gave the deposit: see A.PostPlan).
+  if (plan.estimated and ah * (1 - S.ahCut) or Value(ah, plan)) < vendor then
     d.action, d.reason, d.unit = "VENDOR", "AH pays less than the vendor", vendor
     return d
   end
