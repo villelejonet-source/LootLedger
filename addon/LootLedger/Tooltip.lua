@@ -22,7 +22,8 @@ local function AddLines(tooltip, id, needsShow)
     local h = ns.Prices.History(id)
     local status = ns.Prices.Status()
     if h and h.baseline then
-      local vs = h.baseline > 0 and string.format("  (%+d%%)", math.floor((ah / h.baseline - 1) * 100 + 0.5)) or ""
+      -- The same % the advice line uses (against what is normal for today when there is a weekly pattern)
+      local vs = d.vs and string.format("  (%+d%%)", math.floor(d.vs * 100 + 0.5)) or ""
       Row(tooltip, "Normal price", ns.Money(h.baseline) .. Grey(vs .. "  last few days"))
     elseif status.source == "blizzard" then
       Row(tooltip, "Normal price", Grey("building history (" .. (status.days or 0) .. (status.days == 1 and " day)" or " days)")))
