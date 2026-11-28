@@ -81,15 +81,17 @@ local function Render(filter)
   end
   if shown == 0 then rows[#rows + 1] = { kind = "note", text = "Nothing here right now." } end
 
-  -- Your auctions, as last seen at the AH (Auctions.lua): read only.
-  local live, seen = ns.Auctions.Live()
+  -- This character's auctions, as last seen at the AH (Auctions.lua): read only.
+  local live, seen
+  if filter == "ALL" then live, seen = ns.Auctions.Live() end
   if live and #live > 0 then
-    local back = 0
-    for _, a in ipairs(live) do back = back + (a.back or 0) end
+    local back
+    for _, a in ipairs(live) do if a.back then back = (back or 0) + a.back end end
     rows[#rows + 1] = { kind = "space", h = 6 }
-    rows[#rows + 1] = { kind = "section", text = "Your auctions  (" .. #live .. ")", right = "~" .. ns.Money(back) }
-    rows[#rows + 1] = { kind = "note", text = "As of " .. ns.Ago(time() - seen) .. ", at the AH. Expected back ~"
-      .. ns.Money(back) .. ": each auction's chance to sell before it ends, times its price after the AH cut plus the deposit back." }
+    rows[#rows + 1] = { kind = "section", text = "This character's auctions  (" .. #live .. ")",
+      right = back and ("~" .. ns.Money(back)) or nil }
+    rows[#rows + 1] = { kind = "note", text = "As of " .. ns.Ago(time() - seen)
+      .. ", at the AH. Expected back: the chance to sell before it ends, times the price after the AH cut plus the deposit." }
     for i, a in ipairs(live) do
       if i > MAX_ROWS then rows[#rows + 1] = { kind = "note", text = "More auctions not shown." } break end
       local it = ns.acc.items[a.id] or {}
@@ -97,7 +99,7 @@ local function Render(filter)
       local vs = not a.lowest and "no AH price"
         or unit <= a.lowest and "lowest" or ns.Money(unit - a.lowest) .. " above the lowest"
       local odds = a.chance and (", " .. math.floor(a.chance * 100 + 0.5) .. "% chance it sells before it ends")
-        or a.lowest and ", no sales data" or ""
+        or a.above and ": sells only after cheaper ones" or a.lowest and ", no sales data" or ""
       rows[#rows + 1] = {
         kind = "row", icon = T.ItemIcon(a.id), itemID = a.id,
         label = T.QualityText(it.name or ns.ItemInfo(a.id) or ("item " .. a.id), it.quality) .. T.Color(" x" .. a.n, C.muted),
