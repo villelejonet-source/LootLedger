@@ -8,25 +8,31 @@
 //   - every later snapshot, the units listed below our price are "ahead" of us:
 //     none if that hour's min is at or above our price (equal price: ours is older,
 //     so it goes first), otherwise q5, q10 or q25: the smallest band above that
-//     hour's min that reaches our price. A band also holds units at or above our
-//     price, so this overstates the queue (cautious). More than 25% above the
-//     min: we are as good as never bought.
-//   - buyers take the cheapest units first (true for stackable goods, which most
-//     traded items are). Our unit sells in an hour when more units were bought
-//     than were ahead of us at the start of the hour plus those still ahead at its
-//     end: undercutters still there are taken to have arrived before the buyers.
-//   - an hour without a sales comparison, or without the item, counts as nothing
-//     bought (archived "sold" already undercounts rather than overcounts).
-// So the chances lean low: a real seller who reposts when undercut does better.
+//     hour's min that reaches our price. More than 25% above the min (a stray cheap
+//     listing): nobody reaches us that hour, and the next hour starts with q25 ahead.
+//   - buyers take the cheapest units first. That holds for commodities (stackable
+//     goods) only, so the feed ships numbers for commodities only.
+//   - our unit sells in an hour when more units were bought than were ahead of us
+//     at the start of the hour plus those still ahead at its end: undercutters
+//     still there are taken to have arrived before the buyers.
+//   - an hour without a sales comparison, or without the item, counts as nothing bought.
+// The error runs both ways. Too high: undercutters don't react to our listing (a
+// real 1c undercut of the lowest price would land on our price and count as behind
+// us), and an undercut that is bought out within the hour is never seen. Too low:
+// a band also holds units at or above our price, "sold" undercounts, and a real
+// seller reposts when undercut.
 //
 // Only hours counted under sales rules 2+ are used (rules 1 overcounted cancelled
-// auctions as bought). A start hour counts towards a window only if the archive
-// reaches the window's end. An item gets numbers only with MIN_STARTS start hours
-// for the 48-hour window; otherwise the addon keeps its formula.
+// auctions as bought). Start hours are those whose full 48-hour window the archive
+// covers; all three numbers use the same ones. Snapshot times wander a few minutes
+// around the hour, so a fill up to half an hour after a window's end still counts.
+// An item gets numbers only with MIN_STARTS start hours; otherwise the addon keeps
+// its formula.
 
 const HOUR = 3600e3;
-export const WINDOWS = [12, 24, 48];
-export const MIN_RULES = 2;
+const WINDOWS = [12, 24, 48];
+const SLACK = 0.5; // hours
+const MIN_RULES = 2;
 // A week of start hours: starts an hour apart share most of their window, so
 // they are far from independent; a week at least sees every day of the week once.
 export const MIN_STARTS = 168;
@@ -44,15 +50,15 @@ function unitsBelow(row, price) {
 export function fillTime(times, rows, i) {
   const price = rows[i].min - 1;
   let ahead = 0; // units below our price at the previous snapshot
-  for (let j = i + 1; j < times.length && times[j] - times[i] <= WINDOWS.at(-1) * HOUR; j++) {
+  for (let j = i + 1; j < times.length && times[j] - times[i] <= (WINDOWS.at(-1) + SLACK) * HOUR; j++) {
     const now = unitsBelow(rows[j], price);
     if ((rows[j]?.sold ?? 0) > ahead + now) return (times[j] - times[i]) / HOUR;
-    ahead = now;
+    ahead = Math.min(now, rows[j]?.q25 ?? Infinity); // a stray cheap listing costs one hour, not two
   }
   return Infinity;
 }
 
-// hours: readArchive() output. Returns { [itemId]: { p: [p12, p24, p48] (0..1), n: start hours for 48h } }
+// hours: readArchive() output. Returns { [itemId]: { p: [p12, p24, p48] (0..1), n: start hours } }
 // for the items with enough start hours.
 export function fillChances(hours) {
   hours = hours.filter((h) => h.rules >= MIN_RULES);
@@ -63,17 +69,15 @@ export function fillChances(hours) {
   const out = {};
   for (const id of ids) {
     const rows = hours.map((h) => h.d[id]);
-    const filled = WINDOWS.map(() => 0), starts = WINDOWS.map(() => 0);
-    for (let i = 0; i < rows.length; i++) {
-      if (!(rows[i]?.min > 0) || last - times[i] < WINDOWS[0] * HOUR) continue;
+    const filled = WINDOWS.map(() => 0);
+    let n = 0;
+    for (let i = 0; i < rows.length && last - times[i] >= WINDOWS.at(-1) * HOUR; i++) {
+      if (!(rows[i]?.min > 0)) continue;
       const took = fillTime(times, rows, i);
-      WINDOWS.forEach((w, k) => {
-        if (last - times[i] < w * HOUR) return; // window not complete yet
-        starts[k]++;
-        if (took <= w) filled[k]++;
-      });
+      n++;
+      WINDOWS.forEach((w, k) => { if (took <= w + SLACK) filled[k]++; });
     }
-    if (starts.at(-1) >= MIN_STARTS) out[id] = { p: filled.map((f, k) => f / starts[k]), n: starts.at(-1) };
+    if (n >= MIN_STARTS) out[id] = { p: filled.map((f) => f / n), n };
   }
   return out;
 }
