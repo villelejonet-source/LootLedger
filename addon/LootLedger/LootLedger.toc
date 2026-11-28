@@ -15,6 +15,7 @@ Prices.lua
 Scan.lua
 Inventory.lua
 Advisor.lua
+Auctions.lua
 VendorGuard.lua
 HouseDetect.lua
 Quests.lua
