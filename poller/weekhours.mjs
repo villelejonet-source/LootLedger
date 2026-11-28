@@ -13,6 +13,7 @@
 // can't look like a time-of-week effect. Recent weeks weigh more.
 
 import { dayKey } from "./analysis.mjs";
+import { dayMarket, geoRatio } from "./history.mjs";
 
 const HOUR = 3600e3, DAY = 24 * HOUR, WEEK = 7 * DAY;
 
@@ -45,10 +46,10 @@ export function marketIndex(history, items, t, S = SETTINGS) {
   const devs = [];
   for (const [id, s] of Object.entries(items)) {
     if (!(s.qty >= S.minListed && s.market > 0)) continue;
-    let sum = 0, n = 0;
+    let sum = 0, n = 0, ratio;
     for (const k of keys) {
       const e = history.days[k]?.[id];
-      if (e && e[1] > 0 && e[0] > 0) { sum += Math.log(e[0] / e[1]); n++; }
+      if (e && e[1] > 0 && e[0] > 0) { sum += Math.log(dayMarket(e, (ratio ??= geoRatio(history, id)))); n++; }
     }
     if (n) devs.push(Math.log(s.market) - sum / n);
   }

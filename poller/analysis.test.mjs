@@ -1,7 +1,7 @@
 // node --test poller/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { analyze, weekdayProfile, trend, baseline, weekday, dayKey, houseTrend } from "./analysis.mjs";
+import { analyze, weekdayProfile, trend, baseline, weekday, dayKey } from "./analysis.mjs";
 
 const START = Date.parse("2026-10-05T12:00:00Z"); // a Monday
 const DAY = 86400e3;
@@ -118,10 +118,4 @@ test("analyze puts it together", () => {
   assert.ok(a.baseline > 0);
   assert.equal(a.weekly.values.length, 5);
   assert.equal(a.monthly.values.length, 2); // October + November
-});
-
-test("houseTrend: the median item trend, once 10 items have one", () => {
-  const trends = [-0.03, -0.02, -0.02, -0.015, -0.01, -0.01, 0, 0.01, 0.05, 0.2, null, null];
-  assert.equal(houseTrend(trends), -0.01);
-  assert.equal(houseTrend(trends.slice(0, 9)), null);
 });

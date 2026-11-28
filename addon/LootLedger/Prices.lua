@@ -424,13 +424,6 @@ function P.AHPrice(p)
   return p.recent or p.market or p.region
 end
 
--- The whole house's price drift: its median item trend (fraction per day), or nil
--- (older feeds, or too few items with a trend).
-function P.Drift()
-  local h = CurrentHouse()
-  return h and type(h.drift) == "number" and h.drift / 1000 or nil
-end
-
 -- The AH price we treat as "normal" for this item: the recent baseline (last
 -- few days, weighted to the newest) when there is history. In a young economy
 -- a 30-day average is mostly old news.
