@@ -21,9 +21,10 @@ local function Feed() return type(LootLedgerPrices) == "table" and LootLedgerPri
 -- A feed is generated, but a broken or partial one must not break the addon.
 local function FeedHouses(feed) return feed and type(feed.houses) == "table" and feed.houses or {} end
 
-local function CurrentHouse()
+-- houseID: another house (nil = this character's)
+local function CurrentHouse(houseID)
   local feed = Feed()
-  local id = feed and P.House()
+  local id = feed and (houseID or P.House())
   return id and FeedHouses(feed)[id]
 end
 
@@ -31,14 +32,22 @@ end
 -- Purchases and trending (from the feed's sales / trending tables)
 ---------------------------------------------------------------------------
 -- { sold24, normal (nil if not known yet), auctions24 } or nil
-function P.Sales(itemID)
-  local h = CurrentHouse()
+function P.Sales(itemID, houseID)
+  local h = CurrentHouse(houseID)
   local s = h and h.sales and h.sales[itemID]
   if not s then return nil end
   local sold, normal, auctions = s:match("^(%d+),(%-?%d+),(%d+)$")
   if not sold then return nil end
   normal = tonumber(normal)
   return { sold24 = tonumber(sold), normal = normal >= 0 and normal or nil, auctions24 = tonumber(auctions) }
+end
+
+-- Units listed within 5% of the lowest price (the queue a new listing joins), or
+-- nil if the feed doesn't say (older feeds; items without history).
+function P.Queue(itemID, houseID)
+  local h = CurrentHouse(houseID)
+  local q = h and type(h.queue) == "table" and h.queue[itemID]
+  return type(q) == "number" and q or nil
 end
 
 P.TREND_LISTS = { "hot", "climbing", "drying", "cooling" }
