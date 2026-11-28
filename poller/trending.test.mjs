@@ -288,3 +288,11 @@ test("sales counted under older rules are dropped once, then kept", async () => 
   assert.equal(resetSales(h), false);
   assert.ok(h.sales["2026-11-28"]);
 });
+
+test("security: a trending entry is whole numbers only, whatever its stats hold", () => {
+  const e = { id: 5, sold24: 10, auctions24: '1" PWNED() x="', normal: 4.4, priceChange: 0.1, supplyChange: null, hoursActive: 3, conf: 1 };
+  assert.equal(encodeEntry(e), "5,10,,4,100,,3,1");
+  // Only whole-number item IDs from the hourly records become stats.
+  const hours = [{ t: NOW - HOUR, diff: true, h: 1, s: { 5: [1, 1, 100], "x PWNED": [1, 1, 100] }, q: {} }];
+  assert.deepEqual([...itemStats({ hours }, {}, NOW).stats.keys()], ["5"]);
+});

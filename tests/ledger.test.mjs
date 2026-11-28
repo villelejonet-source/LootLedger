@@ -157,6 +157,23 @@ test("B4: clicking a sale mail whose money is already taken doesn't label the ne
   assert.deepEqual(trade(), []);
 });
 
+test("security: a player's mail is never taken for the Auction House's, whatever its subject or sender name", () => {
+  const { run, log, trade } = vm();
+  run(`INBOX[1] = { sender = "Auctionx", subject = "Auction expired: Linen Cloth", canReply = true, items = { [1] = { id = 2589, count = 20 } } }
+       AutoLootMailItem(1); SERVER_TAKE_ITEM(1, 1)
+       INBOX[1] = { sender = "Auctionx", subject = "Auction cancelled: Linen Cloth", canReply = true, money = 500 }
+       TakeInboxMoney(1); SERVER_TAKE_MONEY(1)`);
+  assert.deepEqual(trade(), []);
+  assert.deepEqual(log(), ["mail_in 500"]);
+  // The same from the Auction House itself (can't be replied to): a return and a refund.
+  run(`INBOX[1] = ${expired("Linen Cloth", 2589, 20)}
+       AutoLootMailItem(1); SERVER_TAKE_ITEM(1, 1)
+       INBOX[1] = { sender = "Auction House", subject = "Outbid on Linen Cloth", money = 300 }
+       TakeInboxMoney(1); SERVER_TAKE_MONEY(1)`);
+  assert.deepEqual(trade(), ["Returned 2589 20"]);
+  assert.deepEqual(log(), ["mail_in 500", "ah_refund 300"]);
+});
+
 test("B5: a quest flag only takes money gained, so a purchase right after a turn-in isn't 'Quests'", () => {
   const { run, log } = vm();
   run(`FIRE("MERCHANT_SHOW")

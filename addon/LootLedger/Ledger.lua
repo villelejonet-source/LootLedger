@@ -290,8 +290,12 @@ local returnPatterns = {}
 for _, g in ipairs({ "AUCTION_EXPIRED_MAIL_SUBJECT", "AUCTION_REMOVED_MAIL_SUBJECT" }) do
   if type(_G[g]) == "string" then returnPatterns[#returnPatterns + 1] = ns.ToPattern(_G[g]) end
 end
-local function IsReturnedAuction(subject)
-  if not subject then return false end
+-- Only mail from the game itself counts: any player can send a mail titled "Auction
+-- expired: Linen Cloth". A player's mail can be replied to (canReply), the Auction
+-- House's can't, in every language.
+local function IsReturnedAuction(index)
+  local _, _, _, subject, _, _, _, _, _, _, _, canReply = GetInboxHeaderInfo(index)
+  if not subject or canReply then return false end
   for _, pat in ipairs(returnPatterns) do if subject:match(pat) then return true end end
   return false
 end
@@ -325,7 +329,7 @@ end
 local function CountReturned(id, count)
   local n = 0
   for i = 1, (GetInboxNumItems and GetInboxNumItems() or 0) do
-    if IsReturnedAuction(select(4, GetInboxHeaderInfo(i))) then
+    if IsReturnedAuction(i) then
       for a = 1, (ATTACHMENTS_MAX_RECEIVE or 16) do
         local aid, acount = AttachmentID(i, a)
         if aid == id and acount == count then n = n + 1 end
@@ -354,7 +358,7 @@ end
 
 local function OnMailItems(index, attachment)
   if not (GetInboxHeaderInfo and GetInboxItem) then return end
-  if not IsReturnedAuction(select(4, GetInboxHeaderInfo(index))) then return end
+  if not IsReturnedAuction(index) then return end
   CheckReturns()  -- settle earlier clicks first: what's still pending hasn't left yet
   local first, last = attachment or 1, attachment or (ATTACHMENTS_MAX_RECEIVE or 16)
   for a = first, last do
@@ -385,10 +389,11 @@ local function OnMailTake(index)
   if not money or money <= 0 then return end
   local inv = L.Invoice(index)
   if inv then Flag("ah_sale", inv.name, inv.n, inv); return end
-  local sender = GetInboxHeaderInfo and select(3, GetInboxHeaderInfo(index))
+  local _, _, sender, _, _, _, _, _, _, _, _, canReply = GetInboxHeaderInfo(index)
   -- English clients only: other locales name the AH sender differently, and their
-  -- refunds are logged as "Mail received".
-  if sender and sender:find("Auction", 1, true) then Flag("ah_refund") else Flag("mail_in") end
+  -- refunds are logged as "Mail received". A player's mail (one that can be replied
+  -- to) is never a refund, even from a character called "Auctionx".
+  if sender and not canReply and sender:find("Auction", 1, true) then Flag("ah_refund") else Flag("mail_in") end
 end
 Hook("TakeInboxMoney", OnMailTake)
 Hook("AutoLootMailItem", function(index) OnMailItems(index); OnMailTake(index) end)

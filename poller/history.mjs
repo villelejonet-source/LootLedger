@@ -10,9 +10,42 @@
 // For the game: per-item series, a compact per-item history string (hist) and
 // the labels for its series.
 import { analyze, baseline, median, weekKey, monthKey, dayKey } from "./analysis.mjs";
+import { luaEscape, toId } from "./feed.mjs";
 
 export const HIST_OUT_DAYS = 30; // daily points sent to the game per item
 export const KEEP_DAYS = 120;    // daily detail kept; older days live on as monthly averages
+
+// History is read back from the history branch, and what is in it ends up in
+// Prices.lua, which runs as code in every player's game. So keep only what has the
+// expected shape: day keys YYYY-MM-DD and month keys YYYY-MM that are real dates,
+// whole-number item IDs, and rows of real numbers (null where an older poller left
+// one out). Anything else is dropped instead of being passed on.
+const isKey = (re) => (k) => re.test(k) && Number.isFinite(Date.parse(k));
+const isDay = isKey(/^\d{4}-\d{2}-\d{2}$/), isMonth = isKey(/^\d{4}-\d{2}$/);
+const isRow = (e) => Array.isArray(e) && e.every((x) => x === null || Number.isFinite(x));
+const isObject = (x) => x != null && typeof x === "object" && !Array.isArray(x);
+const keep = (obj, ok) => Object.fromEntries(Object.entries(isObject(obj) ? obj : {}).filter(([k, v]) => ok(k, v)));
+const items = (obj) => keep(obj, (id, e) => toId(id) && isRow(e));
+const byKey = (obj, isK, clean) => Object.fromEntries(Object.entries(keep(obj, isK)).map(([k, v]) => [k, clean(v)]));
+
+export function cleanHistory(h) {
+  if (!isObject(h)) h = {};
+  h.days = byKey(h.days, isDay, items);
+  h.months = byKey(h.months, isMonth, items);
+  // Fields older history files don't have yet stay missing (the feed fills them in).
+  if (h.sales !== undefined) h.sales = byKey(h.sales, isDay, items);
+  if (h.salesHours !== undefined) h.salesHours = keep(h.salesHours, (k, v) => isDay(k) && Number.isFinite(v));
+  if (h.hours !== undefined) {
+    h.hours = (Array.isArray(h.hours) ? h.hours : [])
+      .filter((x) => isObject(x) && Number.isFinite(x.t) && (x.h === undefined || Number.isFinite(x.h)))
+      .map((x) => ({ ...x, s: items(x.s), q: items(x.q) }));
+  }
+  if (h.index !== undefined) {
+    h.index = (Array.isArray(h.index) ? h.index : [])
+      .filter((x) => isObject(x) && Number.isFinite(x.t) && Number.isFinite(x.v) && (x.g === undefined || Number.isFinite(x.g)));
+  }
+  return h;
+}
 
 // Add one hourly snapshot ({ [id]: { market, min, qty } }) to today's entry.
 export function addSnapshot(history, items, now) {
@@ -65,7 +98,7 @@ export function recentMedians(hours) {
   if (last.length < 3 || last[0].t - last[2].t > 4 * 3600e3) return out;
   for (const id of Object.keys(last[0].q)) {
     const v = last.map((h) => h.q[id]?.[1]);
-    if (v.every((x) => x > 0)) out[id] = median(v);
+    if (v.every((x) => Number.isFinite(x) && x > 0)) out[id] = median(v);
   }
   return out;
 }
@@ -91,7 +124,7 @@ export function archiveOldDays(history, now, keepDays = KEEP_DAYS) {
 
 // The last 12 months that have any data (archived or in the daily window), oldest first.
 export function monthKeys(history, days) {
-  return [...new Set([...Object.keys(history.months ?? {}), ...days.map(monthKey)])].sort().slice(-12);
+  return [...new Set([...Object.keys(history.months ?? {}).filter(isMonth), ...days.map(monthKey)])].sort().slice(-12);
 }
 
 // One item's monthly averages for the given months, combining archive and daily window.
@@ -160,6 +193,6 @@ export function encodeHistory(series, monthly) {
 // Labels for the series above, shared by every item in a house.
 export function labels(days, months) {
   const uniq = (xs) => [...new Set(xs)];
-  const q = (xs) => xs.map((x) => `"${x}"`).join(",");
+  const q = (xs) => xs.map((x) => `"${luaEscape(x)}"`).join(",");
   return `dayLabels = { ${q(days.slice(-HIST_OUT_DAYS))} }, weekLabels = { ${q(uniq(days.map(weekKey)).slice(-12))} }, monthLabels = { ${q(months ?? uniq(days.map(monthKey)).slice(-12))} }`;
 }
