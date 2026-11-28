@@ -211,25 +211,23 @@ local function Render(view)
   return SupplyRows(rows, id, p, h)
 end
 
--- Posting it: the suggested price, its floor, the queue you would join, and per
--- auction length the deposit, the chance to sell and the expected net (Advisor.PostPlan).
+-- Posting it: the suggested price, the floor, the queue you would join, and the
+-- chance to sell in a 24h auction with its deposit and what a unit is worth
+-- relisted until it sells (Advisor.PostPlan).
 function PostRows(rows, d)
   local pl = d.plan
   if not pl then return end
-  local floor = d.floor or pl.vendorFloor
   rows[#rows + 1] = { kind = "section", text = "Posting", right = T.Color("you post it yourself", C.muted) }
-  rows[#rows + 1] = { kind = "row", label = "Suggested price", note = "1c under the lowest listing, " .. ns.Money(pl.lowest),
-    value = d.post and ns.Money(d.post) or T.Color("not now", C.muted) }
-  rows[#rows + 1] = { kind = "row", label = "Floor", value = ns.Money(floor),
-    note = floor > pl.vendorFloor and "85% of the normal price" or "the least that beats vendoring, after the cut and deposit risk" }
+  rows[#rows + 1] = { kind = "row", label = "Suggested price", value = d.post and ns.Money(d.post) or T.Color("not now", C.muted),
+    note = pl.price + 1 == pl.lowest and ("1c under the lowest listing, " .. ns.Money(pl.lowest))
+      or ("1c under the AH price: the lowest, " .. ns.Money(pl.lowest) .. ", looks like a stray") }
+  rows[#rows + 1] = { kind = "row", label = "Floor", value = ns.Money(pl.vendorFloor),
+    note = "the least that beats vendoring, after the cut and relisting" }
   rows[#rows + 1] = { kind = "row", label = "Queue you would join", value = pl.queue .. " + your " .. pl.qty,
     note = "units within 5% of the lowest; " .. (pl.perDay and ("buyers take ~" .. math.floor(pl.perDay + 0.5) .. " a day") or "no sales data yet") }
-  for _, e in ipairs(pl.by) do
-    rows[#rows + 1] = { kind = "row", label = e.hours .. "h auction",
-      note = "deposit " .. ns.Money(e.deposit) .. (e.chance and e == pl.best and ", best" or ""),
-      value = (e.chance and (math.floor(e.chance * 100 + 0.5) .. "% sells, ") or "")
-        .. (e.net < 0 and ns.Signed(math.floor(e.net)) or ns.Money(e.net)) .. T.Color(" each", C.muted) }
-  end
+  rows[#rows + 1] = { kind = "row", label = "24h auction",
+    note = "deposit " .. ns.Money(pl.deposit) .. (pl.estimated and " (estimate)" or "") .. ", lost each time it comes back unsold",
+    value = (pl.chance and (math.floor(pl.chance * 100 + 0.5) .. "% sells, ") or "") .. "worth ~" .. ns.Money(d.unit or 0) .. T.Color(" each", C.muted) }
 end
 
 -- The whole auction house by hour of the week: when do items list highest and lowest?
