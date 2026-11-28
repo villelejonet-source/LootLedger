@@ -183,6 +183,7 @@ local function Value(price, plan)
 end
 
 -- { lowest, price (suggested), queue, qty, perDay, chance (nil without sales data),
+--   fillDays (chance measured on this AH over that many days; nil = the formula's estimate),
 --   deposit, estimated (deposit is our estimate), vendorFloor (the least that beats vendoring) }
 -- house: another house's prices (nil = this character's).
 function A.PostPlan(id, p, qty, house)
@@ -195,6 +196,16 @@ function A.PostPlan(id, p, qty, house)
   local plan = { lowest = lowest, price = math.max(1, (stray and ah or lowest) - 1), qty = qty, perDay = perDay,
     queue = (not stray and P.Queue(id, house)) or p.auctions or 0 }  -- ...nor its 5% band the queue
   plan.chance = perDay and 1 - math.exp(-perDay / (plan.queue + qty))
+  -- Measured on this AH when the feed has it (P.Fill): p24 is how often one unit
+  -- posted 1c under the lowest sold within 24h, undercuts included. qty units: the
+  -- formula discounted by what it got wrong for one unit, formula(qty) * p24 / formula(1);
+  -- no sales data: p24. Not when we post at the AH price over a stray (p24 was measured
+  -- at the lowest), nor a measured 0 (the replay is cautious; it would mean endless relists).
+  local fill = P.Fill(id, house)
+  if fill and not stray and fill.p24 > 0 then
+    plan.chance = perDay and math.min(1, plan.chance * fill.p24 / (1 - math.exp(-perDay / (plan.queue + 1)))) or fill.p24
+    plan.fillDays = math.floor(fill.n / 24 + 0.5)  -- days of this AH behind it
+  end
   plan.deposit, plan.estimated = Deposit(id, vendor)
   -- Only the client's own deposit may make the AH lose to the vendor: the estimate
   -- is unverified (and neutral houses charge far more), so it only shows.
@@ -282,7 +293,7 @@ function A.Decide(id, qty)
 
   -- Worth less on the AH than at the vendor, after the cut and the deposits lost
   -- relisting (only when the client gave the deposit: see A.PostPlan).
-  if (plan.estimated and ah * (1 - S.ahCut) or Value(ah, plan)) < vendor then
+  if vendor > 0 and (plan.estimated and ah * (1 - S.ahCut) or Value(ah, plan)) < vendor then  -- no vendor price: never Vendor
     d.action, d.reason, d.unit = "VENDOR", "AH pays less than the vendor", vendor
     return d
   end

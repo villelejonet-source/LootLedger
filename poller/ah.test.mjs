@@ -202,6 +202,39 @@ test("A12: the first run with new sales rules drops the old counts and says so",
   assert.equal(h.sales[today], undefined);
 });
 
+test("F5: fill chances: a fill table only for commodities on archived houses with enough archive, other lines unchanged", async (t) => {
+  // 220 archived hours of Linen (a commodity) and a sword (not one), 1 of each bought every hour, ending an hour ago
+  const now = Date.now(), files = {};
+  for (let k = 220; k >= 1; k--) {
+    const t = now - k * 3600e3, f = `113.hours.${new Date(t).toISOString().slice(0, 10)}.json.gz`;
+    files[f] ??= { v: 1, fields: ["min", "market", "qty", "n", "q5", "q10", "q25", "sold", "gold", "span"], hours: [] };
+    files[f].hours.push({ t, r: 2, d: { 2589: [50, 50, 20, 1, 20, 20, 20, 1, 50, 1], 15000: [5000, 5000, 3, 3, 1, 2, 3, 1, 5000, 1] } });
+  }
+  const goods = { auctions: [listing(1, 15000, 1, 5000)], commodities: [{ id: 2, item: { id: 2589 }, quantity: 20, unit_price: 50, time_left: "LONG" }] };
+  const spec = { houses: HOUSES, data: { 113: goods, 114: goods } };
+  const r = await runFeed(spec, files, { ARCHIVE_HOUSES: "113" });
+  assert.equal(r.code, 0, r.out);
+  const lua = await r.lua();
+  // The feed workflow runs these tests before installing packages: check the Lua syntax where luaparse is there.
+  const luaparse = await import("luaparse").then((m) => m.default, () => null);
+  if (luaparse) luaparse.parse(lua, { luaVersion: "5.1" });
+  else t.diagnostic("luaparse not installed: Prices.lua syntax not checked");
+  const b113 = lua.slice(lua.indexOf("  [113] = "), lua.indexOf("  [114] = "));
+  const b114 = lua.slice(lua.indexOf("  [114] = "), lua.indexOf("\n  },\n  spd"));
+  // starts with a full 24 hours after them: the archived hours 24+ hours old
+  assert.match(b113, /\n    fill = \{\n\[2589\]="1000,197",\n    \},\n    trending = /);
+  assert.doesNotMatch(b114, /fill/);
+  const body = (b) => b.slice(b.indexOf("\n")).trimEnd(); // after the line with the house name
+  assert.equal(body(b113).replace(/\n    fill = \{\n.*\n    \},/, ""), body(b114), "same block otherwise");
+  assert.match(r.out, /house 113: fill chances for 2 items/, "the sword has numbers, but they aren't shipped");
+
+  // a corrupt archive day: no fill table, but the run goes on
+  const bad = await runFeed(spec, { ...files, [Object.keys(files)[0]]: "not gzip" }, { ARCHIVE_HOUSES: "113" });
+  assert.equal(bad.code, 0, bad.out);
+  assert.doesNotMatch(await bad.lua(), /fill = /);
+  assert.match(bad.out, /house 113: fill chances skipped/);
+});
+
 test("A13: queue depth ships as a new table for items with history; existing line formats are unchanged", async () => {
   // Linen: 35 listed at 50/52/62 (25 within 5% of the lowest), enough listed for history.
   // Light Leather: 2 listed, no history, so no queue line either.
