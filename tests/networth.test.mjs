@@ -36,13 +36,14 @@ test("net worth: gold on every character plus items, each at its own auction hou
   run(VANISH_BAGS);
   const w = "ns.Advisor.NetWorth()";
   assert.equal(get(`${w}.gold`), 150000);
-  // Vanish: 10 x 950 (AH after cut) + 5 x 13 (junk, vendor) + 3 x 40 (no AH price: vendor)
-  // Alt: 10 x 1900 at the Alliance house
-  assert.equal(get(`${w}.items`), 9500 + 65 + 120 + 19000);
-  assert.equal(get(`${w}.total`), 150000 + 9500 + 65 + 120 + 19000);
+  // Vanish: 10 x 854 (posted 1c under the lowest, 8s99c, after the cut) + 5 x 13 (junk, vendor)
+  //   + 3 x 40 (no AH price: vendor)
+  // Alt: 10 x 1804 at the Alliance house (18s99c after the cut)
+  assert.equal(get(`${w}.items`), 8540 + 65 + 120 + 18040);
+  assert.equal(get(`${w}.total`), 150000 + 8540 + 65 + 120 + 18040);
   assert.equal(get(`${w}.unpriced`), 1);
   assert.equal(get(`${w}.chars[1].name`), "Vanish"); // richest first
-  assert.equal(get(`${w}.chars[2].total`), 50000 + 19000);
+  assert.equal(get(`${w}.chars[2].total`), 50000 + 18040);
 });
 
 test("net worth: an item the AH pays less for than a vendor counts at the vendor price", () => {

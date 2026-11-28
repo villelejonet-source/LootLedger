@@ -234,3 +234,25 @@ test("F5: fill chances: a fill table only for commodities on archived houses wit
   assert.doesNotMatch(await bad.lua(), /fill = /);
   assert.match(bad.out, /house 113: fill chances skipped/);
 });
+
+test("A13: queue depth ships as a new table for items with history; existing line formats are unchanged", async () => {
+  // Linen: 35 listed at 50/52/62 (25 within 5% of the lowest), enough listed for history.
+  // Light Leather: 2 listed, no history, so no queue line either.
+  const auctions = [listing(1, 2589, 20, 50), listing(2, 2589, 5, 52), listing(3, 2589, 10, 62), listing(4, 2318, 2, 300)];
+  // An hour ago 30 Linen were in listing 1: 10 were bought since, so there is a sales line.
+  const now = Date.now();
+  const prevSnap = { t: now - 3600e3, l: [[1, 2589, 30, 50, 2, 1], [2, 2589, 5, 52, 2, 1], [3, 2589, 10, 62, 2, 1], [4, 2318, 2, 300, 2, 0]] };
+  const lm = new Date(now).toUTCString();
+  const r = await runFeed({ houses: HOUSES.slice(0, 1), data: { 113: { auctions, lm, clm: lm } } }, { "113.snap.json.gz": prevSnap });
+  assert.equal(r.code, 0, r.out);
+  const lua = await r.lua();
+  const queue = lua.match(/\n    queue = \{\n([^}]*)\n    \},\n/);
+  assert.ok(queue, lua.slice(0, 1500));
+  assert.deepEqual(queue[1].split("\n"), ["[2589]=25,"]);
+  // What older addon versions parse with strict patterns: items "market,min,qty,avg7,avg30", sales "sold24,normal,auctions24".
+  const block = (name) => lua.match(new RegExp(`\n    ${name} = \{\n([^}]*)\n    \},`))[1].split("\n");
+  assert.deepEqual(block("items").sort(), ['[2318]="300,300,2,300,300",', '[2589]="50,50,35,50,50",']);
+  const salesLines = block("sales");
+  assert.ok(salesLines.length > 0);
+  for (const l of salesLines) assert.match(l, /^\[\d+\]="\d+,-?\d+,\d+",$/);
+});

@@ -29,6 +29,7 @@ A.SETTINGS = {
   waitGain = 0.05,       -- wait for a better time of the week only if it usually pays 5%+ more...
   minWaitGain = 100,     -- ...and at least 1 silver more per item
   peakNear = 0.02,       -- within 2% of the week's best = a good time now (whole-house pattern)
+  depositPer12h = 0.15,  -- deposit estimate (see A.PostPlan): 15% of the vendor price per 12 hours
 }
 
 A.ACTIONS = {
@@ -142,8 +143,72 @@ function A.Timing(h, t)
   return nil
 end
 
--- Returns { action, reason, unit (copper you'd get per item), ah, normal, vs }
-function A.Decide(id)
+---------------------------------------------------------------------------
+-- Posting: at what price, how likely it sells, and what that is worth (advice only).
+-- Kept simple so every number can be explained:
+--   * You post 1c under the lowest listing, or under the AH price when the
+--     lowest is a stray cheap listing (more than 10% under it).
+--   * Others undercut you in turn, so you don't stay first: you stand behind the
+--     units already near the lowest price (within 5% of it, from the feed;
+--     everything listed if the feed doesn't say).
+--   * Buyers take units at the item's normal rate on this AH (bought per day,
+--     else last 24h), spread evenly over the day. So the chance your units sell
+--     in one 24h auction is P = 1 - exp(-perDay / (queue + qty)).
+--   * An unsold auction comes back and is relisted until it sells, losing its
+--     deposit each time: on average (1 - P) / P times. So one unit is worth
+--     0.95 * price - deposit * (1 - P) / P.
+-- No sales data: no chance, worth 0.95 * price (as before this model).
+---------------------------------------------------------------------------
+-- Deposit per unit for a 24h auction, and whether it's our estimate. The client's
+-- own figure when it has one (commodities, at the AH); otherwise 15% of the
+-- vendor price per 12 hours, rounded up.
+local function Deposit(id, vendor)
+  local api = C_AuctionHouse and C_AuctionHouse.CalculateCommodityDeposit
+  if api then
+    local ok, dep = pcall(api, id, 2, 1)  -- 2 = the client's code for 24h
+    if ok and type(dep) == "number" and dep > 0 then return dep, false end
+  end
+  return math.ceil(vendor * A.SETTINGS.depositPer12h * 2), true
+end
+
+-- What one unit brings at `price`, relisted until it sells (see above).
+local function Value(price, plan)
+  local net = price * (1 - A.SETTINGS.ahCut)
+  if not plan.chance then return net end
+  return net - plan.deposit * (1 - plan.chance) / plan.chance
+end
+
+-- { lowest, price (suggested), queue, qty, perDay, chance (nil without sales data),
+--   deposit, estimated (deposit is our estimate), vendorFloor (the least that beats vendoring) }
+-- house: another house's prices (nil = this character's).
+function A.PostPlan(id, p, qty, house)
+  local P, vendor, ah = ns.Prices, p.vendor or 0, ns.Prices.AHPrice(p)
+  local s = P.Sales(id, house)
+  local perDay = s and (s.normal or s.sold24)
+  if perDay == 0 then perDay = nil end
+  local lowest = p.min or ah
+  local stray = lowest < 0.9 * ah  -- a stray cheap listing doesn't set the price...
+  local plan = { lowest = lowest, price = math.max(1, (stray and ah or lowest) - 1), qty = qty, perDay = perDay,
+    queue = (not stray and P.Queue(id, house)) or p.auctions or 0 }  -- ...nor its 5% band the queue
+  plan.chance = perDay and 1 - math.exp(-perDay / (plan.queue + qty))
+  plan.deposit, plan.estimated = Deposit(id, vendor)
+  -- Only the client's own deposit may make the AH lose to the vendor: the estimate
+  -- is unverified (and neutral houses charge far more), so it only shows.
+  local relists = plan.chance and not plan.estimated and (1 - plan.chance) / plan.chance or 0
+  plan.vendorFloor = math.ceil((vendor + plan.deposit * relists) / (1 - A.SETTINGS.ahCut))
+  return plan
+end
+
+-- One unit's worth by the plan: the AH (posted as suggested, relisted until it
+-- sells) or the vendor, whichever pays more.
+local function Worth(plan, vendor)
+  return math.max(vendor, math.floor(Value(plan.price, plan)))
+end
+
+-- Returns { action, reason, unit (copper you'd get per item), ah, normal, vs, plan,
+--   and for LIST/SELL: post (suggested price), pSell (chance in 24h, or nil) }
+-- qty: how many you'd post (default: what your characters on this AH own).
+function A.Decide(id, qty)
   local S = A.SETTINGS
   local p = ns.Prices.Get(id)
   local vendor = p.vendor or 0
@@ -163,10 +228,12 @@ function A.Decide(id)
 
   local ah = ns.Prices.AHPrice(p)
   local normal = ns.Prices.NormalPrice(p, id)
-  local net = math.floor(ah * (1 - S.ahCut))
-  local d = { ah = ah, normal = normal, unit = net }
+  local plan = A.PostPlan(id, p, math.max(1, qty or ns.Inventory.Total(id)))
+  local d = { ah = ah, normal = normal, plan = plan, unit = Worth(plan, vendor) }
 
-  if net < vendor then
+  -- Worth less on the AH than at the vendor, after the cut and the deposits lost
+  -- relisting (only when the client gave the deposit: see A.PostPlan).
+  if (plan.estimated and ah * (1 - S.ahCut) or Value(ah, plan)) < vendor then
     d.action, d.reason, d.unit = "VENDOR", "AH pays less than the vendor", vendor
     return d
   end
@@ -248,7 +315,8 @@ function A.Decide(id)
   end
   local wk = ns.Prices.WeekdayAdvice(h)
   if wk then d.bestDays = wk.best end
-  if (p.soldPerDay and p.soldPerDay < 10) or (not p.soldPerDay and p.saleRate and p.saleRate < 0.2) then
+  -- (A chance to sell, below, says it better than "slow seller".)
+  if not plan.chance and ((p.soldPerDay and p.soldPerDay < 10) or (not p.soldPerDay and p.saleRate and p.saleRate < 0.2)) then
     d.reason = d.reason .. ", slow seller"
   end
   -- Demand signals: trending now, or wanted for high-level quests.
@@ -257,6 +325,20 @@ function A.Decide(id)
   if tr and (tr.list == "hot" or tr.list == "drying") then d.reason = d.reason .. ", in demand right now" end
   local questLevel = ns.Quests and ns.Quests.Level(id)
   if questLevel and questLevel >= 50 then d.reason = d.reason .. ", people buy it for quests" end
+
+  -- Listing now: at what price, and how likely it sells. Never under what beats
+  -- the vendor. A thin market keeps its "check the AH" (one seller sets the price).
+  if d.action == "LIST" or d.action == "SELL" then
+    if plan.price < plan.vendorFloor then
+      if not thin then d.action, d.reason = "HOLD", "Not worth posting now: lowest is under " .. ns.Money(plan.vendorFloor) end
+    else
+      d.post, d.pSell = plan.price, plan.chance
+      if plan.chance and not thin then
+        d.reason = d.reason .. "; post at " .. ns.Money(d.post) .. ", " .. (plan.chance >= 0.75 and "likely sells in a day"
+          or ("about " .. math.floor(plan.chance * 100 + 0.5) .. "% chance a day"))
+      end
+    end
+  end
   return d
 end
 
@@ -265,7 +347,7 @@ end
 function A.InventoryPlan()
   local list = {}
   for id, owned in pairs(ns.Inventory.AllItems()) do
-    local d = A.Decide(id)
+    local d = A.Decide(id, owned.total)
     local it = ns.acc.items[id] or {}
     list[#list + 1] = {
       id = id, name = it.name or ("item " .. id), qty = owned.total,
@@ -283,16 +365,17 @@ end
 -- Net worth: gold on every character of the account, plus what their items
 -- (bags, bank, mail as of the last visit) would bring at current prices.
 ---------------------------------------------------------------------------
--- What one unit would bring you at a house: the AH price after the cut, or the
--- vendor price if that pays more. Soulbound and junk: vendor price. No AH price
--- known: vendor price, and `unpriced` is true (it may be worth more).
+-- What one unit would bring you at a house: posted as the advice suggests and
+-- relisted until it sells (the same value as the advice's), or the vendor price
+-- if that pays more. Soulbound and junk: vendor price. No AH price known: vendor
+-- price, and `unpriced` is true (it may be worth more).
 function A.UnitWorth(id, house)
   local p = ns.Prices.Get(id, house)
   local vendor = p.vendor or 0
   local item = ns.acc and ns.acc.items and ns.acc.items[id] or {}
   if item.bound or Quality(id) == 0 then return vendor, false end
   if not p.hasAH then return vendor, true end
-  return math.max(math.floor(ns.Prices.AHPrice(p) * (1 - A.SETTINGS.ahCut)), vendor), false
+  return Worth(A.PostPlan(id, p, math.max(1, (ns.Inventory.Total(id))), house), vendor), false
 end
 
 -- { gold, items, total, unpriced (item stacks without an AH price),
